@@ -15,6 +15,7 @@
 #include <vector>
 
 #define NUM_STEPS 500
+#define NUM_REPEATS 10
 
 namespace {
 
@@ -25,6 +26,8 @@ constexpr double TOLERANCE = 1e-10;
 constexpr std::array<int, 5> GRID_SIZES = {
     256, 512, 1024, 2048, 4096
 };
+
+using Clock = std::chrono::steady_clock;
 
 struct Grid {
     int nx;
@@ -78,18 +81,25 @@ struct ValidationResult {
     double max_boundary_error;
 };
 
+struct RunResult {
+    double initialization_time;
+    double computation_time;
+    double validation_time;
+    double total_time;
+    ValidationResult validation;
+};
+
 struct ExperimentResult {
     int n;
     NumericalParameters parameters;
     double initialization_time;
     double computation_time;
+    double computation_stddev;
     double validation_time;
     double total_time;
     double growth;
     ValidationResult validation;
 };
-
-using Clock = std::chrono::steady_clock;
 
 NumericalParameters calculate_parameters(int n) {
     const double dx = DOMAIN_LENGTH / (n - 1);
@@ -229,11 +239,11 @@ ValidationResult validate_solution(const Grid& grid) {
     };
 }
 
-ExperimentResult run_experiment(int n) {
+RunResult run_once(
+    int n,
+    const NumericalParameters& params
+) {
     const auto total_start = Clock::now();
-
-    const NumericalParameters params =
-        calculate_parameters(n);
 
     const auto initialization_start = Clock::now();
 
@@ -260,8 +270,6 @@ ExperimentResult run_experiment(int n) {
     const auto total_end = Clock::now();
 
     return {
-        n,
-        params,
         std::chrono::duration<double>(
             initialization_end - initialization_start
         ).count(),
@@ -274,6 +282,106 @@ ExperimentResult run_experiment(int n) {
         std::chrono::duration<double>(
             total_end - total_start
         ).count(),
+        validation
+    };
+}
+
+double calculate_mean(const std::vector<double>& values) {
+    double sum = 0.0;
+
+    for (const double value : values) {
+        sum += value;
+    }
+
+    return sum / values.size();
+}
+
+double calculate_sample_stddev(
+    const std::vector<double>& values,
+    double mean
+) {
+    if (values.size() < 2) {
+        return 0.0;
+    }
+
+    double sum_squared_diff = 0.0;
+
+    for (const double value : values) {
+        const double diff = value - mean;
+        sum_squared_diff += diff * diff;
+    }
+
+    return std::sqrt(
+        sum_squared_diff / (values.size() - 1)
+    );
+}
+
+ExperimentResult run_experiment(int n) {
+    const NumericalParameters params =
+        calculate_parameters(n);
+
+    std::vector<double> initialization_times;
+    std::vector<double> computation_times;
+    std::vector<double> validation_times;
+    std::vector<double> total_times;
+
+    initialization_times.reserve(NUM_REPEATS);
+    computation_times.reserve(NUM_REPEATS);
+    validation_times.reserve(NUM_REPEATS);
+    total_times.reserve(NUM_REPEATS);
+
+    bool all_passed = true;
+    double min_temp = std::numeric_limits<double>::max();
+    double max_temp = std::numeric_limits<double>::lowest();
+    double max_boundary_error = 0.0;
+
+    for (int repeat = 0; repeat < NUM_REPEATS; ++repeat) {
+        const RunResult run = run_once(n, params);
+
+        initialization_times.push_back(run.initialization_time);
+        computation_times.push_back(run.computation_time);
+        validation_times.push_back(run.validation_time);
+        total_times.push_back(run.total_time);
+
+        all_passed = all_passed && run.validation.passed;
+
+        min_temp = std::min(
+            min_temp,
+            run.validation.min_temperature
+        );
+
+        max_temp = std::max(
+            max_temp,
+            run.validation.max_temperature
+        );
+
+        max_boundary_error = std::max(
+            max_boundary_error,
+            run.validation.max_boundary_error
+        );
+    }
+
+    const double mean_computation =
+        calculate_mean(computation_times);
+
+    const ValidationResult validation{
+        all_passed,
+        min_temp,
+        max_temp,
+        max_boundary_error
+    };
+
+    return {
+        n,
+        params,
+        calculate_mean(initialization_times),
+        mean_computation,
+        calculate_sample_stddev(
+            computation_times,
+            mean_computation
+        ),
+        calculate_mean(validation_times),
+        calculate_mean(total_times),
         0.0,
         validation
     };
@@ -305,10 +413,10 @@ void write_csv(const std::vector<ExperimentResult>& results) {
     }
 
     file
-        << "grid_size,dx,dy,dt,simulated_time,num_steps,"
-        << "initialization_time_s,computation_time_s,"
-        << "validation_time_s,total_time_s,runtime_growth,"
-        << "min_temperature,max_temperature,"
+        << "grid_size,dx,dy,dt,simulated_time,num_steps,repetitions,"
+        << "initialization_mean_s,computation_mean_s,"
+        << "computation_stddev_s,validation_mean_s,total_mean_s,"
+        << "runtime_growth,min_temperature,max_temperature,"
         << "max_boundary_error,validation_passed\n";
 
     file << std::setprecision(12);
@@ -321,8 +429,10 @@ void write_csv(const std::vector<ExperimentResult>& results) {
             << result.parameters.dt << ","
             << result.parameters.simulated_time << ","
             << NUM_STEPS << ","
+            << NUM_REPEATS << ","
             << result.initialization_time << ","
             << result.computation_time << ","
+            << result.computation_stddev << ","
             << result.validation_time << ","
             << result.total_time << ","
             << result.growth << ","
@@ -340,34 +450,36 @@ void print_summary(const std::vector<ExperimentResult>& results) {
     std::cout
         << std::left
         << std::setw(9)  << "Grid"
-        << std::setw(12) << "dx"
-        << std::setw(12) << "dt"
-        << std::setw(13) << "Sim.Time"
-        << std::setw(11) << "Init(s)"
-        << std::setw(14) << "Compute(s)"
-        << std::setw(14) << "Validate(s)"
-        << std::setw(12) << "Total(s)"
-        << std::setw(10) << "Growth"
+        << std::setw(13) << "dx"
+        << std::setw(13) << "dt"
+        << std::setw(14) << "Sim.Time"
+        << std::setw(14) << "Init(s)"
+        << std::setw(16) << "Compute(s)"
+        << std::setw(13) << "Std.Dev"
+        << std::setw(16) << "Validate(s)"
+        << std::setw(14) << "Total(s)"
+        << std::setw(11) << "Growth"
         << "Status\n";
 
-    std::cout << std::setprecision(6);
+    std::cout << std::fixed << std::setprecision(6);
 
     for (const auto& r : results) {
         std::cout
             << std::left
             << std::setw(9)  << r.n
-            << std::setw(12) << r.parameters.dx
-            << std::setw(12) << r.parameters.dt
-            << std::setw(13) << r.parameters.simulated_time
-            << std::setw(11) << r.initialization_time
-            << std::setw(14) << r.computation_time
-            << std::setw(14) << r.validation_time
-            << std::setw(12) << r.total_time;
+            << std::setw(13) << r.parameters.dx
+            << std::setw(13) << r.parameters.dt
+            << std::setw(14) << r.parameters.simulated_time
+            << std::setw(14) << r.initialization_time
+            << std::setw(16) << r.computation_time
+            << std::setw(13) << r.computation_stddev
+            << std::setw(16) << r.validation_time
+            << std::setw(14) << r.total_time;
 
         if (r.growth == 0.0) {
-            std::cout << std::setw(10) << "-";
+            std::cout << std::setw(11) << "-";
         } else {
-            std::cout << std::setw(10) << r.growth;
+            std::cout << std::setw(11) << r.growth;
         }
 
         std::cout
