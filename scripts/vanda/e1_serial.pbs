@@ -1,0 +1,42 @@
+
+#!/bin/bash
+
+#PBS -P personal-linxi.li
+#PBS -q batch_cpu
+#PBS -N heat_e1_serial
+#PBS -l select=1:ncpus=1:mem=4gb
+#PBS -l walltime=00:30:00
+#PBS -j oe
+
+set -euo pipefail
+
+cd "${PBS_O_WORKDIR:?PBS_O_WORKDIR is not set}"
+
+echo "E1 Serial Runtime Scaling"
+echo "Job ID: ${PBS_JOBID}"
+echo "Compute Node: $(hostname)"
+echo "Start Time: $(date)"
+echo "Git Commit: $(git rev-parse --short HEAD)"
+
+echo
+echo "Compiler:"
+g++ --version
+
+mkdir -p build results/raw
+
+echo
+echo "Compiling Serial Solver..."
+
+g++ -std=c++17 -O3 -DNDEBUG -Iinclude \
+    src/serial.cpp -o build/heat_serial
+
+echo "Compilation successful."
+
+echo
+echo "Running E1..."
+
+./build/heat_serial
+
+echo
+echo "End Time: $(date)"
+echo "E1 completed successfully."
