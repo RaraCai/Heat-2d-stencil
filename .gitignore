@@ -1,0 +1,6 @@
+build/
+results/raw/
+results/figures/
+*.o
+*.out
+*.err
