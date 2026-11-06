@@ -8,7 +8,6 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -22,17 +21,26 @@ bool supported_rank_count(int ranks)
            heat::kE2RankCounts.end();
 }
 
-std::string rank_file_name(const char* prefix, int ranks)
-{
-    std::ostringstream name;
-    name << "results/raw/" << prefix << "_" << ranks << ".csv";
-    return name.str();
-}
-
 } // namespace
 
 int main(int argc, char** argv)
 {
+    if (argc == 2 && std::string(argv[1]) == "--summary") {
+        try {
+            const double serial_baseline = heat::read_e1_serial_baseline(
+                heat::kE1BaselineCsv, heat::kE2GlobalNx);
+            const auto results = heat::read_e2_csv(heat::kE2OutputCsv);
+            heat::print_strong_scaling_summary(results, serial_baseline);
+            return std::all_of(
+                results.begin(), results.end(),
+                [](const auto& result) { return result.validation.passed; })
+                ? 0 : 2;
+        } catch (const std::exception& error) {
+            std::cerr << "E2 summary error: " << error.what() << '\n';
+            return 1;
+        }
+    }
+
     int provided = MPI_THREAD_SINGLE;
     const int init_status = MPI_Init_thread(&argc, &argv,
                                             MPI_THREAD_FUNNELED, &provided);
@@ -74,13 +82,18 @@ int main(int argc, char** argv)
         heat::Grid current = heat::make_local_grid(domain);
         heat::Grid next = heat::make_local_grid(domain);
 
-        std::vector<heat::MpiRunResult> runs;
-        runs.reserve(heat::kE2Repeats);
+        std::vector<double> total_samples;
+        std::vector<double> halo_samples;
+        if (world_rank == 0) {
+            total_samples.reserve(heat::kE2Repeats);
+            halo_samples.reserve(heat::kE2Repeats);
+        }
 
         bool all_passed = true;
         double global_min = std::numeric_limits<double>::max();
         double global_max = std::numeric_limits<double>::lowest();
         double global_boundary_error = 0.0;
+        const double experiment_start = MPI_Wtime();
 
         for (int repeat = 0; repeat < heat::kE2Repeats; ++repeat) {
             heat::initialize(current, domain.global_nx, domain.global_ny);
@@ -113,26 +126,29 @@ int main(int argc, char** argv)
                 global_boundary_error, validation.max_boundary_error);
 
             if (world_rank == 0) {
-                runs.push_back({repeat + 1, global_total, global_halo, validation});
-                std::cerr << "\r[E2] Ranks " << std::setw(3) << world_size
-                          << " | Repeat " << std::setw(2) << repeat + 1
-                          << '/' << heat::kE2Repeats << std::flush;
+                total_samples.push_back(global_total);
+                halo_samples.push_back(global_halo);
+                std::cerr << "\r[E2] Grid "
+                          << std::left << std::setw(11)
+                          << (std::to_string(heat::kE2GlobalNx) + " x " +
+                              std::to_string(heat::kE2GlobalNy))
+                          << " | Ranks " << std::right << std::setw(3)
+                          << world_size << " | Repeat " << std::setw(2)
+                          << repeat + 1 << '/' << heat::kE2Repeats
+                          << std::flush;
             }
         }
 
         if (world_rank == 0) {
-            std::cerr << "\r[E2] Ranks " << std::setw(3) << world_size
-                      << " | " << heat::kE2Repeats << '/'
-                      << heat::kE2Repeats << " completed\n";
-
-            std::vector<double> total_samples;
-            std::vector<double> halo_samples;
-            total_samples.reserve(runs.size());
-            halo_samples.reserve(runs.size());
-            for (const auto& run : runs) {
-                total_samples.push_back(run.total_runtime);
-                halo_samples.push_back(run.halo_runtime);
-            }
+            std::cerr << "\r[E2] Grid "
+                      << std::left << std::setw(11)
+                      << (std::to_string(heat::kE2GlobalNx) + " x " +
+                          std::to_string(heat::kE2GlobalNy))
+                      << " | Ranks " << std::right << std::setw(3) << world_size
+                      << " | " << heat::kE2Repeats << '/' << heat::kE2Repeats
+                      << " completed | Finished in " << std::fixed
+                      << std::setprecision(3) << MPI_Wtime() - experiment_start
+                      << " s          \n";
 
             const auto minmax = std::minmax_element(
                 total_samples.begin(), total_samples.end());
@@ -150,34 +166,16 @@ int main(int argc, char** argv)
             result.halo_runtime_median = heat::median(halo_samples);
             result.validation = {
                 all_passed, global_min, global_max, global_boundary_error};
-            result.runs = runs;
-
-            std::vector<heat::MpiExperimentResult> one_result{result};
-            const std::string summary_path =
-                rank_file_name("e2_rank", world_size);
-            const std::string runs_path =
-                rank_file_name("e2_runs_rank", world_size);
-
-            heat::write_e2_csv(one_result, summary_path);
-            heat::write_e2_runs_csv(one_result, runs_path);
-
-            std::cout << std::fixed << std::setprecision(6)
-                      << "\nE2 MPI Strong Scaling — single configuration\n"
-                      << "Global grid       : " << heat::kE2GlobalNx << " x "
-                      << heat::kE2GlobalNy << '\n'
-                      << "MPI ranks         : " << world_size << '\n'
-                      << "Process grid      : " << domain.dims[0] << " x "
-                      << domain.dims[1] << '\n'
-                      << "Local grid (rank 0): " << domain.local_nx << " x "
-                      << domain.local_ny << '\n'
-                      << "Steps / repeats   : " << heat::kSteps << " / "
-                      << heat::kE2Repeats << '\n'
-                      << "Median runtime    : " << result.runtime_median << " s\n"
-                      << "Median halo time  : " << result.halo_runtime_median << " s\n"
-                      << "Validation        : "
-                      << (result.validation.passed ? "PASS" : "FAIL") << '\n'
-                      << "Summary CSV       : " << summary_path << '\n'
-                      << "Raw runs CSV      : " << runs_path << "\n";
+            const double serial_baseline = heat::read_e1_serial_baseline(
+                heat::kE1BaselineCsv, heat::kE2GlobalNx);
+            const double mpi_baseline = world_size == 1
+                ? result.runtime_median
+                : heat::read_e2_single_rank_baseline(heat::kE2OutputCsv);
+            result.speedup_mpi = mpi_baseline / result.runtime_median;
+            result.speedup_serial = serial_baseline / result.runtime_median;
+            result.parallel_efficiency =
+                result.speedup_mpi / static_cast<double>(world_size);
+            heat::write_e2_csv({result}, heat::kE2OutputCsv);
 
             if (!all_passed) {
                 exit_code = 2;

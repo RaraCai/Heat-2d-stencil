@@ -25,14 +25,6 @@ struct ExperimentResult {
     ValidationResult validation;
 };
 
-// E2: one record for each MPI repetition.
-struct MpiRunResult {
-    int repetition;
-    double total_runtime;
-    double halo_runtime;
-    ValidationResult validation;
-};
-
 // E2: aggregated result for one MPI process-count configuration.
 struct MpiExperimentResult {
     int global_nx;
@@ -50,7 +42,6 @@ struct MpiExperimentResult {
     double speedup_serial;
     double parallel_efficiency;
     ValidationResult validation;
-    std::vector<MpiRunResult> runs;
 };
 
 double mean(const std::vector<double>& values);

@@ -22,6 +22,13 @@ finish.
 `build/debug` may be used for debugging but must not be used for performance
 measurements.
 
+Run E2 strong scaling with `scripts/local/run_e2.sh`. It writes one row per
+rank configuration to `results/raw/e2_strong.csv`; the 1-rank configuration
+is run first to establish the MPI speedup baseline (and is automatically
+included when a subset of rank counts is requested).
+Individual repetition samples are used for statistics but are not written to
+CSV. The script prints one E1-style summary table after all selected runs.
+
 ## MPI extension contract
 
 - `Grid(nx, ny, halo, global_row, global_col)` owns a local rectangular region.
