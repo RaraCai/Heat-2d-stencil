@@ -2,8 +2,8 @@
 
 #PBS -P personal-linxi.li
 #PBS -N heat_e3_weak
-#PBS -l select=4:ncpus=64:mpiprocs=64:mem=16gb
-#PBS -l walltime=00:30:00
+#PBS -l select=4:ncpus=72:mpiprocs=72:ompthreads=1:mem=8gb
+#PBS -l walltime=01:00:00
 #PBS -j oe
 
 set -euo pipefail
@@ -12,10 +12,10 @@ cd "${PBS_O_WORKDIR:?PBS_O_WORKDIR is not set}"
 
 echo "E3 MPI Weak Scaling"
 echo "Job ID: ${PBS_JOBID}"
-echo "Compute Nodes:"
-sort -u "${PBS_NODEFILE}"
+echo "Compute Nodes and Slots:"
+sort "${PBS_NODEFILE}" | uniq -c
 echo "Start Time: $(date)"
-echo "Git Commit: $(git rev-parse --short HEAD)"
+echo "Git Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unavailable)"
 
 source /app1/ebenv
 
@@ -24,57 +24,67 @@ module load OpenMPI/5.0.3-GCC-13.3.0
 module load CMake/3.29.3-GCCcore-13.3.0
 
 echo
-echo "Compiler:"
-mpicxx --version
+echo "Loaded Modules:"
+module list
 
 echo
-echo "MPI:"
+echo "Compiler:"
+g++ --version
+
+echo
+echo "MPI Compiler:"
+which mpicxx
+mpicxx --showme:version
+
+echo
+echo "MPI Runtime:"
 mpirun --version
 
 echo
 echo "CMake:"
 cmake --version
 
-mkdir -p build/vanda results/raw
+BUILD_DIR="build/vanda"
+mkdir -p "${BUILD_DIR}" results/raw
 
 echo
 echo "Configuring project..."
-
-cmake -S . -B build/vanda \
+cmake -S . -B "${BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTING=ON \
-    -DMPI_CXX_COMPILER="$(command -v mpicxx)"
+    -DBUILD_TESTING=ON
 
 echo
-echo "Building E3 target and tests..."
-
-cmake --build build/vanda \
-    --target stencil_weak_mpi test_core test_mpi \
-    --parallel 8
+echo "Building project..."
+cmake --build "${BUILD_DIR}" --parallel 4
 
 echo
 echo "Running project tests..."
-
-ctest --test-dir build/vanda --output-on-failure
+ctest --test-dir "${BUILD_DIR}" --output-on-failure
 
 echo
-echo "Running E3 MPI Weak Scaling Experiment..."
+echo "Archiving previous E3 results..."
+ARCHIVE_DIR="results/archive/e3_${PBS_JOBID}"
+mkdir -p "${ARCHIVE_DIR}"
+shopt -s nullglob
+OLD_RESULTS=(results/raw/e3_*.csv)
+if (( ${#OLD_RESULTS[@]} > 0 )); then
+    mv "${OLD_RESULTS[@]}" "${ARCHIVE_DIR}/"
+fi
+
+echo
+echo "Running complete E3 MPI Weak Scaling..."
 echo "Ranks: 1, 4, 16, 64, 256"
-echo "Each rank uses a 256 x 256 local grid."
-
-rm -f results/raw/e3_weak.csv
-
-for ranks in 1 4 16 64 256; do
-    echo
-    echo "[E3] Running with ${ranks} MPI ranks..."
-    mpirun -np "${ranks}" ./build/vanda/stencil_weak_mpi
-done
+echo "Local grid per rank: 256 x 256"
+BUILD_DIR="${BUILD_DIR}" ./scripts/local/run_e3.sh
 
 echo
-echo "E3 summary:"
-./build/vanda/stencil_weak_mpi --summary
+echo "Final E3 Summary:"
+"${BUILD_DIR}/stencil_weak_mpi" --summary
 
 echo
-echo "Results: results/raw/e3_weak.csv"
+echo "Generated E3 Results:"
+ls -lh results/raw/e3_*.csv
+
+echo
 echo "End Time: $(date)"
-echo "E3 completed successfully."
+echo "E3 Weak Scaling completed successfully."
