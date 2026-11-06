@@ -435,6 +435,242 @@ double read_e2_single_rank_baseline(const std::string& path)
     return read_csv_value(path, "ranks", "1", "runtime_median_s");
 }
 
+void print_weak_scaling_summary(
+    const std::vector<MpiExperimentResult>& results)
+{
+    constexpr char separator[] =
+        "==============================================================================================================";
+    constexpr char table_separator[] =
+        "--------------------------------------------------------------------------------------------------------------";
+
+    if (results.empty()) {
+        throw std::invalid_argument("Cannot print an empty E3 summary.");
+    }
+
+    const auto& configuration = results.front();
+    const auto largest_grid = std::max_element(
+        results.begin(), results.end(),
+        [](const auto& lhs, const auto& rhs) {
+            return lhs.global_nx < rhs.global_nx;
+        });
+    bool all_passed = true;
+    for (const auto& result : results) {
+        all_passed = all_passed && result.validation.passed;
+    }
+
+    std::cout << '\n' << separator << '\n'
+              << "  E3 | MPI WEAK SCALING\n"
+              << separator << '\n'
+              << "  Configuration\n"
+              << "  Local Grid / Rank : " << kE3LocalNx << " x "
+              << kE3LocalNy << '\n'
+              << "  Global Grid Range : " << kE3LocalNx << " x " << kE3LocalNy
+              << " to " << largest_grid->global_nx << " x "
+              << largest_grid->global_ny << '\n'
+              << "  Spatial Steps     : dx = " << std::scientific
+              << std::setprecision(6) << kDomainLength / (kE3LocalNx - 1)
+              << ", dy = " << kDomainLength / (kE3LocalNy - 1)
+              << ", dt = " << kTheta /
+                    (2.0 * kThermalDiffusivity *
+                     (std::pow((kE3LocalNx - 1) / kDomainLength, 2) +
+                      std::pow((kE3LocalNy - 1) / kDomainLength, 2)))
+              << '\n'
+              << "  Iterations        : " << configuration.steps << '\n'
+              << "  Repetitions       : " << configuration.repetitions << '\n'
+              << "  Runtime Metric    : Median of max-rank elapsed time (seconds)\n\n"
+              << table_separator << '\n'
+              << "  " << std::left << std::setw(9) << "Ranks"
+              << std::setw(13) << "Process Grid"
+              << std::setw(18) << "Global Grid"
+              << std::setw(16) << "Local / Rank"
+              << std::right << std::setw(16) << "Median (s)"
+              << std::setw(15) << "Halo (s)"
+              << std::setw(20) << "Weak Efficiency"
+              << std::setw(10) << "Status" << '\n'
+              << table_separator << '\n'
+              << std::fixed << std::setprecision(3);
+
+    for (const auto& result : results) {
+        std::ostringstream process_grid;
+        process_grid << result.process_rows << 'x' << result.process_cols;
+        std::ostringstream global_grid;
+        global_grid << result.global_nx << 'x' << result.global_ny;
+        std::ostringstream local_grid;
+        local_grid << result.global_nx / result.process_rows << 'x'
+                   << result.global_ny / result.process_cols;
+        std::ostringstream efficiency;
+        efficiency << std::fixed << std::setprecision(2)
+                   << result.weak_scaling_efficiency * 100.0 << '%';
+
+        std::cout << "  " << std::left << std::setw(9) << result.ranks
+                  << std::setw(13) << process_grid.str()
+                  << std::setw(18) << global_grid.str()
+                  << std::setw(16) << local_grid.str()
+                  << std::right << std::setw(16) << result.runtime_median
+                  << std::setw(15) << result.halo_runtime_median
+                  << std::setw(20) << efficiency.str()
+                  << std::setw(10)
+                  << (result.validation.passed ? "PASS" : "FAIL") << '\n';
+    }
+
+    std::cout << table_separator << '\n'
+              << "  Validation      : " << (all_passed ? "ALL PASSED" : "FAILED") << '\n'
+              << "  Expected        : ~100% weak-scaling efficiency\n"
+              << "  Results CSV     : " << kE3OutputCsv << '\n'
+              << separator << "\n\n";
+}
+
+void write_e3_csv(const std::vector<MpiExperimentResult>& results,
+                  const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path()) {
+        std::filesystem::create_directories(destination.parent_path());
+    }
+
+    bool write_header = true;
+    if (std::filesystem::exists(destination)) {
+        std::ifstream existing(path);
+        if (!existing) {
+            throw std::runtime_error("Cannot read existing E3 CSV: " + path);
+        }
+        write_header = existing.peek() == std::ifstream::traits_type::eof();
+        std::string line;
+        if (!write_header) {
+            std::getline(existing, line);
+            const auto header = split_csv_row(line);
+            const std::size_t ranks_column = column_index(header, "ranks", path);
+            column_index(header, "weak_scaling_efficiency", path);
+            while (std::getline(existing, line)) {
+                const auto fields = split_csv_row(line);
+                if (fields.size() <= ranks_column) {
+                    throw std::runtime_error("Malformed row in existing E3 CSV: " + path);
+                }
+                for (const auto& result : results) {
+                    if (fields[ranks_column] == std::to_string(result.ranks)) {
+                        throw std::runtime_error(
+                            "E3 CSV already contains results for " +
+                            std::to_string(result.ranks) + " ranks: " + path);
+                    }
+                }
+            }
+        }
+    }
+
+    std::ofstream file(path, std::ios::app);
+    if (!file) {
+        throw std::runtime_error("Cannot open E3 CSV output: " + path);
+    }
+    if (write_header) {
+        file << "global_nx,global_ny,ranks,process_rows,process_cols,local_nx,local_ny,"
+                "dx,dy,dt,steps,repetitions,runtime_median_s,runtime_min_s,"
+                "runtime_max_s,halo_runtime_median_s,initialization_median_s,"
+                "solver_mean_s,solver_stddev_s,ftcs_median_s,halo_mean_s,"
+                "validation_median_s,total_median_s,weak_scaling_efficiency,"
+                "min_temperature,max_temperature,max_boundary_error,validation_passed\n";
+    }
+    file << std::setprecision(12);
+    for (const auto& result : results) {
+        const double dx = kDomainLength / (kE3LocalNx - 1);
+        const double dy = kDomainLength / (kE3LocalNy - 1);
+        const double dt = kTheta /
+            (2.0 * kThermalDiffusivity * (1.0 / (dx * dx) + 1.0 / (dy * dy)));
+        file << result.global_nx << ',' << result.global_ny << ','
+             << result.ranks << ',' << result.process_rows << ','
+             << result.process_cols << ','
+             << result.global_nx / result.process_rows << ','
+             << result.global_ny / result.process_cols << ','
+             << dx << ',' << dy << ',' << dt << ','
+             << result.steps << ',' << result.repetitions << ','
+             << result.runtime_median << ',' << result.runtime_min << ','
+             << result.runtime_max << ',' << result.halo_runtime_median << ','
+             << result.initialization_median << ',' << result.solver_mean << ','
+             << result.solver_stddev << ',' << result.ftcs_median << ','
+             << result.halo_mean << ',' << result.validation_median << ','
+             << result.total_median << ',' << result.weak_scaling_efficiency << ','
+             << result.validation.min_temperature << ','
+             << result.validation.max_temperature << ','
+             << result.validation.max_boundary_error << ','
+             << (result.validation.passed ? 1 : 0) << '\n';
+    }
+}
+
+std::vector<MpiExperimentResult> read_e3_csv(const std::string& path)
+{
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Cannot open E3 results CSV: " + path);
+    }
+    std::string line;
+    if (!std::getline(file, line)) {
+        throw std::runtime_error("E3 results CSV is empty: " + path);
+    }
+    const auto header = split_csv_row(line);
+    const auto index = [&](const std::string& name) {
+        return column_index(header, name, path);
+    };
+    const std::size_t global_nx = index("global_nx");
+    const std::size_t global_ny = index("global_ny");
+    const std::size_t ranks = index("ranks");
+    const std::size_t process_rows = index("process_rows");
+    const std::size_t process_cols = index("process_cols");
+    const std::size_t steps = index("steps");
+    const std::size_t repetitions = index("repetitions");
+    const std::size_t runtime = index("runtime_median_s");
+    const std::size_t runtime_min = index("runtime_min_s");
+    const std::size_t runtime_max = index("runtime_max_s");
+    const std::size_t halo_runtime = index("halo_runtime_median_s");
+    const std::size_t efficiency = index("weak_scaling_efficiency");
+    const std::size_t minimum = index("min_temperature");
+    const std::size_t maximum = index("max_temperature");
+    const std::size_t boundary_error = index("max_boundary_error");
+    const std::size_t validation = index("validation_passed");
+    const std::size_t required_fields = std::max({
+        global_nx, global_ny, ranks, process_rows, process_cols, steps,
+        repetitions, runtime, runtime_min, runtime_max, halo_runtime,
+        efficiency, minimum, maximum, boundary_error, validation
+    }) + 1;
+
+    std::vector<MpiExperimentResult> results;
+    while (std::getline(file, line)) {
+        const auto fields = split_csv_row(line);
+        if (fields.size() < required_fields) {
+            throw std::runtime_error("Malformed row in E3 results CSV: " + path);
+        }
+        MpiExperimentResult result{};
+        result.global_nx = std::stoi(fields[global_nx]);
+        result.global_ny = std::stoi(fields[global_ny]);
+        result.ranks = std::stoi(fields[ranks]);
+        result.process_rows = std::stoi(fields[process_rows]);
+        result.process_cols = std::stoi(fields[process_cols]);
+        result.steps = std::stoi(fields[steps]);
+        result.repetitions = std::stoi(fields[repetitions]);
+        result.runtime_median = std::stod(fields[runtime]);
+        result.runtime_min = std::stod(fields[runtime_min]);
+        result.runtime_max = std::stod(fields[runtime_max]);
+        result.halo_runtime_median = std::stod(fields[halo_runtime]);
+        result.weak_scaling_efficiency = std::stod(fields[efficiency]);
+        result.validation.min_temperature = std::stod(fields[minimum]);
+        result.validation.max_temperature = std::stod(fields[maximum]);
+        result.validation.max_boundary_error = std::stod(fields[boundary_error]);
+        result.validation.passed = fields[validation] == "1";
+        results.push_back(result);
+    }
+    if (results.empty()) {
+        throw std::runtime_error("E3 results CSV has no data rows: " + path);
+    }
+    std::sort(results.begin(), results.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  return lhs.ranks < rhs.ranks;
+              });
+    return results;
+}
+
+double read_e3_single_rank_baseline(const std::string& path)
+{
+    return read_csv_value(path, "ranks", "1", "runtime_median_s");
+}
+
 } // namespace heat
 
 namespace heat {

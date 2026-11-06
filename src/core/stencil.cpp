@@ -1,21 +1,39 @@
 #include "stencil.hpp"
+#include <cmath>
 #include <stdexcept>
 namespace heat {
     NumericalParameters make_parameters(int nx,int ny,int steps){
         if(nx<3||ny<3||steps<0)throw std::invalid_argument("Invalid domain or steps");
         const double dx=kDomainLength/(nx-1),dy=kDomainLength/(ny-1);
+        return make_parameters(nx,ny,steps,dx,dy);
+    }
+    NumericalParameters make_parameters(int nx,int ny,int steps,double dx,double dy){
+        if(nx<3||ny<3||steps<0||!std::isfinite(dx)||!std::isfinite(dy)||
+           dx<=0.0||dy<=0.0)
+            throw std::invalid_argument("Invalid domain, steps, or spatial spacing");
         const double dt=kTheta/(2.0*kThermalDiffusivity*(1.0/(dx*dx)+1.0/(dy*dy)));
         const double rx=kThermalDiffusivity*dt/(dx*dx),ry=kThermalDiffusivity*dt/(dy*dy);
         if(rx+ry>0.5+kTolerance)throw std::runtime_error("FTCS stability violated");
         return {dx,dy,dt,rx,ry,steps*dt};
     }
     void initialize(Grid& grid,int global_nx,int global_ny){
-        if(global_nx<3||global_ny<3||grid.global_row()+grid.nx()>global_nx||
-        grid.global_col()+grid.ny()>global_ny)
+        if(global_nx<3||global_ny<3)
             throw std::invalid_argument("Invalid global grid extent");
-        const double dx=kDomainLength/(global_nx-1),dy=kDomainLength/(global_ny-1);
-        const double lo=(1.0-kHotspotSideRatio)*kDomainLength/2.0;
-        const double hi=(1.0+kHotspotSideRatio)*kDomainLength/2.0;
+        initialize(grid,global_nx,global_ny,
+                   kDomainLength/(global_nx-1),
+                   kDomainLength/(global_ny-1));
+    }
+    void initialize(Grid& grid,int global_nx,int global_ny,double dx,double dy){
+        if(global_nx<3||global_ny<3||grid.global_row()+grid.nx()>global_nx||
+        grid.global_col()+grid.ny()>global_ny||!std::isfinite(dx)||
+        !std::isfinite(dy)||dx<=0.0||dy<=0.0)
+            throw std::invalid_argument("Invalid global grid extent");
+        const double length_x=(global_nx-1)*dx;
+        const double length_y=(global_ny-1)*dy;
+        const double lo_x=(1.0-kHotspotSideRatio)*length_x/2.0;
+        const double hi_x=(1.0+kHotspotSideRatio)*length_x/2.0;
+        const double lo_y=(1.0-kHotspotSideRatio)*length_y/2.0;
+        const double hi_y=(1.0+kHotspotSideRatio)*length_y/2.0;
         for(int i=0;i<grid.nx();++i){
             const int gi=grid.global_row()+i;
             const double x=gi*dx;
@@ -24,7 +42,8 @@ namespace heat {
                 const double y=gj*dy;
                 const bool boundary=gi==0||gi==global_nx-1||gj==0||gj==global_ny-1;
                 grid.at(i,j)=boundary?kBoundaryTemperature:
-                    (x>=lo&&x<=hi&&y>=lo&&y<=hi?kHotspotTemperature:kBackgroundTemperature);
+                    (x>=lo_x&&x<=hi_x&&y>=lo_y&&y<=hi_y
+                        ?kHotspotTemperature:kBackgroundTemperature);
             }
         }
     }

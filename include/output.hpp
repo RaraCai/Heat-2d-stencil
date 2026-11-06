@@ -30,4 +30,11 @@ void write_e2_runs_csv(const std::vector<MpiExperimentResult>& results,
 void write_e2_csv(const std::vector<MpiExperimentResult>& results,
                   const std::string& path);
 
+void print_weak_scaling_summary(
+    const std::vector<MpiExperimentResult>& results);
+std::vector<MpiExperimentResult> read_e3_csv(const std::string& path);
+double read_e3_single_rank_baseline(const std::string& path);
+void write_e3_csv(const std::vector<MpiExperimentResult>& results,
+                  const std::string& path);
+
 } // namespace heat

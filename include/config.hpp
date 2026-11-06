@@ -28,6 +28,13 @@ inline constexpr std::array<int, 5> kE2RankCounts{{1, 4, 16, 64, 256}};
 inline constexpr const char* kE1BaselineCsv = "results/raw/e1_serial.csv";
 inline constexpr const char* kE2OutputCsv = "results/raw/e2_strong.csv";
 
+// E3 weak scaling keeps each rank's owned grid fixed at 256 x 256.
+inline constexpr int kE3LocalNx = 256;
+inline constexpr int kE3LocalNy = 256;
+inline constexpr int kE3Repeats = kE2Repeats;
+inline constexpr std::array<int, 5> kE3RankCounts = kE2RankCounts;
+inline constexpr const char* kE3OutputCsv = "results/raw/e3_weak.csv";
+
 struct NumericalParameters {
     double dx;
     double dy;
@@ -38,5 +45,7 @@ struct NumericalParameters {
 };
 
 NumericalParameters make_parameters(int nx, int ny, int steps);
+NumericalParameters make_parameters(int nx, int ny, int steps,
+                                    double dx, double dy);
 
 } // namespace heat

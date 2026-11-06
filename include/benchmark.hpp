@@ -43,7 +43,7 @@ struct MpiRunResult {
     bool passed;
 };
 
-// E2: aggregated result for one MPI process-count configuration.
+// E2/E3: aggregated result for one MPI process-count configuration.
 struct MpiExperimentResult {
     int global_nx;
     int global_ny;
@@ -72,6 +72,7 @@ struct MpiExperimentResult {
     double speedup_mpi;
     double speedup_serial;
     double parallel_efficiency;
+    double weak_scaling_efficiency = 0.0;
     ValidationResult validation;
 };
 

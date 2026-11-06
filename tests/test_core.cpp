@@ -93,6 +93,87 @@ bool test_e2_csv_output()
     return passed;
 }
 
+bool test_e3_csv_output()
+{
+    const auto suffix=std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto path=std::filesystem::temp_directory_path()/
+        ("heat_e3_output_"+suffix+".csv");
+    bool passed=false;
+    std::streambuf* original_buffer=nullptr;
+    try {
+        auto one_rank=make_mpi_result(1,1.0);
+        one_rank.global_nx=256;
+        one_rank.global_ny=256;
+        one_rank.weak_scaling_efficiency=1.0;
+        auto four_ranks=make_mpi_result(4,1.2);
+        four_ranks.global_nx=512;
+        four_ranks.global_ny=512;
+        four_ranks.weak_scaling_efficiency=1.0/1.2;
+        heat::write_e3_csv({one_rank},path.string());
+        heat::write_e3_csv({four_ranks},path.string());
+        const auto results=heat::read_e3_csv(path.string());
+
+        std::ostringstream summary;
+        original_buffer=std::cout.rdbuf(summary.rdbuf());
+        heat::print_weak_scaling_summary(results);
+        std::cout.rdbuf(original_buffer);
+        original_buffer=nullptr;
+
+        passed=results.size()==2 && results[0].ranks==1 &&
+            results[1].ranks==4 &&
+            std::abs(results[1].weak_scaling_efficiency-1.0/1.2)<1e-12 &&
+            heat::read_e3_single_rank_baseline(path.string())==1.0 &&
+            summary.str().find("E3 | MPI WEAK SCALING")!=std::string::npos &&
+            summary.str().find("to 512 x 512")!=std::string::npos &&
+            summary.str().find("ALL PASSED")!=std::string::npos;
+    } catch(...) {
+        if(original_buffer)std::cout.rdbuf(original_buffer);
+        std::error_code error;
+        std::filesystem::remove(path,error);
+        throw;
+    }
+
+    std::error_code error;
+    std::filesystem::remove(path,error);
+    return passed;
+}
+
+bool test_fixed_spacing_parameters_and_initialization()
+{
+    const auto anisotropic=heat::make_parameters(32,48,20,0.01,0.02);
+    if(anisotropic.dx!=0.01 || anisotropic.dy!=0.02 ||
+       std::abs(anisotropic.rx-anisotropic.ry)<1e-12 ||
+       anisotropic.rx+anisotropic.ry>0.5+heat::kTolerance)
+        return false;
+
+    const auto baseline=heat::make_parameters(
+        heat::kE3LocalNx,heat::kE3LocalNy,heat::kSteps);
+    const auto scaled=heat::make_parameters(
+        2*heat::kE3LocalNx,2*heat::kE3LocalNy,heat::kSteps,
+        baseline.dx,baseline.dy);
+    if(std::abs(scaled.dx-baseline.dx)>1e-15 ||
+       std::abs(scaled.dy-baseline.dy)>1e-15 ||
+       std::abs(scaled.dt-baseline.dt)>1e-15 ||
+       std::abs(scaled.simulated_time-baseline.simulated_time)>1e-12)
+        return false;
+
+    heat::Grid small(heat::kE3LocalNx,heat::kE3LocalNy);
+    heat::Grid large(2*heat::kE3LocalNx,2*heat::kE3LocalNy);
+    heat::initialize(small,small.nx(),small.ny(),baseline.dx,baseline.dy);
+    heat::initialize(large,large.nx(),large.ny(),baseline.dx,baseline.dy);
+    std::size_t small_hotspots=0;
+    std::size_t large_hotspots=0;
+    for(double value:small.data())if(value==heat::kHotspotTemperature)++small_hotspots;
+    for(double value:large.data())if(value==heat::kHotspotTemperature)++large_hotspots;
+    return small.at(0,0)==heat::kBoundaryTemperature &&
+        large.at(0,0)==heat::kBoundaryTemperature &&
+        small.at(small.nx()/2,small.ny()/2)==heat::kHotspotTemperature &&
+        large.at(large.nx()/2,large.ny()/2)==heat::kHotspotTemperature &&
+        large_hotspots>small_hotspots*3 &&
+        large_hotspots<small_hotspots*5;
+}
+
 } // namespace
 
 int main(){
@@ -104,6 +185,7 @@ int main(){
     if(!v.passed || std::abs(p.rx-0.125)>1e-12)return 1;
     heat::Grid local(8,8,1,10,10);
     heat::initialize(local,64,64);
-    if(!test_e2_csv_output())return 1;
+    if(!test_e2_csv_output()||!test_e3_csv_output()||
+       !test_fixed_spacing_parameters_and_initialization())return 1;
     std::cout<<"PASS core smoke test\n";
 }

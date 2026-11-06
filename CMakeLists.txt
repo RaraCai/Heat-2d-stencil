@@ -31,6 +31,10 @@ add_executable(stencil_strong_mpi src/strong_mpi.cpp)
 target_link_libraries(stencil_strong_mpi PRIVATE heat_mpi MPI::MPI_CXX)
 target_compile_options(stencil_strong_mpi PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(stencil_weak_mpi src/weak_mpi.cpp)
+target_link_libraries(stencil_weak_mpi PRIVATE heat_mpi MPI::MPI_CXX)
+target_compile_options(stencil_weak_mpi PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(test_core tests/test_core.cpp)

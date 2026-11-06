@@ -1,10 +1,8 @@
 # Heat 2D Stencil — E1–E4-ready refactor
 
 C++17, Linux/WSL, CMake + Ninja. `heat_core` contains shared grid, initialization,
-FTCS step, validation, benchmark statistics and CSV output. E1 is implemented.
-E2/E3/E4 entry points are intentionally placeholders; no MPI/OpenMP functionality
-is claimed until domain decomposition, halo exchange, reductions and threading
-are implemented and tested.
+FTCS step, validation, benchmark statistics and CSV output. E1, MPI E2 strong
+scaling, and MPI E3 weak scaling are implemented. E4 remains a placeholder.
 
 ## Build and run
 
@@ -28,6 +26,13 @@ is run first to establish the MPI speedup baseline (and is automatically
 included when a subset of rank counts is requested).
 Individual repetition samples are used for statistics but are not written to
 CSV. The script prints one E1-style summary table after all selected runs.
+
+Run E3 weak scaling with `scripts/local/run_e3.sh [ranks...]`. Supported rank
+counts are 1, 4, 16, 64, and 256; the 1-rank baseline is automatically run
+first. Each rank owns a fixed 256 x 256 grid, while the global grid scales from
+256 x 256 to 4096 x 4096. Spatial spacing, time step, and iteration count are
+held fixed. Results are written to `results/raw/e3_weak.csv`.
+On Vanda, submit the full E3 job with `qsub scripts/vanda/e3_weak.pbs`.
 
 ## MPI extension contract
 
