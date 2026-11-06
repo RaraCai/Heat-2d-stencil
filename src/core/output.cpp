@@ -33,7 +33,7 @@ void print_summary(const std::vector<ExperimentResult>& results,
              <<"  Runtime Metric   : "<<config.runtime_metric<<'\n'
              <<'\n'<<table_separator<<'\n'
              <<"  "<<std::left<<std::setw(14)<<"Grid"
-             <<std::right<<std::setw(16)<<"Mean (s)"
+             <<std::right<<std::setw(16)<<"Comp. Mean. (s)"
              <<std::setw(20)<<"Std. Dev. (s)"
              <<std::setw(12)<<"Growth"
              <<std::setw(10)<<"Status"<<'\n'
