@@ -18,24 +18,42 @@ echo "Compute Node: $(hostname)"
 echo "Start Time: $(date)"
 echo "Git Commit: $(git rev-parse --short HEAD)"
 
+source /app1/ebenv
+
+module load GCC/13.3.0
+module load CMake/3.29.3-GCCcore-13.3.0
+
 echo
 echo "Compiler:"
 g++ --version
 
-mkdir -p build results/raw
+echo
+echo "CMake:"
+cmake --version
+
+mkdir -p build/vanda results/raw
 
 echo
-echo "Compiling Serial Solver..."
+echo "Configuring project..."
 
-g++ -std=c++17 -O3 -DNDEBUG -Iinclude \
-    src/serial.cpp -o build/heat_serial
-
-echo "Compilation successful."
+cmake -S . -B build/vanda \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=ON
 
 echo
-echo "Running E1..."
+echo "Building project..."
 
-./build/heat_serial
+cmake --build build/vanda --parallel 1
+
+echo
+echo "Running core tests..."
+
+ctest --test-dir build/vanda --output-on-failure
+
+echo
+echo "Running E1 Serial Experiment..."
+
+./build/vanda/stencil_serial
 
 echo
 echo "End Time: $(date)"
