@@ -172,8 +172,12 @@ void solve_mpi(Grid& current, Grid& next,
     double local_ftcs_seconds = 0.0;
     for (int step = 0; step < steps; ++step) {
         exchange_halos(current, domain, &local_halo_seconds);
+
+        const double ftcs_start = MPI_Wtime();
         ftcs_step(current, next, params,
                   domain.global_nx, domain.global_ny);
+        local_ftcs_seconds += MPI_Wtime() - ftcs_start;
+
         current.swap_data(next);
     }
 
