@@ -35,6 +35,7 @@ struct MpiDomain {
 
 struct MpiTiming {
     double halo_exchange_seconds = 0.0;
+    double ftcs_seconds = 0.0;
 };
 
 // Create a 2D Cartesian communicator and a balanced (possibly uneven)

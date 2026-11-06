@@ -42,7 +42,8 @@ bool test_e2_csv_output()
 
     {
         std::ofstream baseline(baseline_path);
-        baseline<<"grid_size,computation_mean_s\n4096,8.5\n";
+        baseline << "grid_size,computation_median_s,computation_mean_s\n"
+         << "4096,8.5,8.6\n";
     }
 
     bool passed=false;

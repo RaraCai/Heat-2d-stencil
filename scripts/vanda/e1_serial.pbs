@@ -2,7 +2,6 @@
 #!/bin/bash
 
 #PBS -P personal-linxi.li
-#PBS -q batch_cpu
 #PBS -N heat_e1_serial
 #PBS -l select=1:ncpus=1:mem=4gb
 #PBS -l walltime=00:30:00

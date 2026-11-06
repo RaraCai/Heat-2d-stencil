@@ -25,6 +25,8 @@ void print_strong_scaling_summary(const std::vector<MpiExperimentResult>& result
 std::vector<MpiExperimentResult> read_e2_csv(const std::string& path);
 double read_e1_serial_baseline(const std::string& path, int grid_size);
 double read_e2_single_rank_baseline(const std::string& path);
+void write_e2_runs_csv(const std::vector<MpiExperimentResult>& results,
+                       const std::string& path);
 void write_e2_csv(const std::vector<MpiExperimentResult>& results,
                   const std::string& path);
 

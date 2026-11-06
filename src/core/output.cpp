@@ -103,8 +103,9 @@ void print_summary(const std::vector<ExperimentResult>& results,
               << "  Runtime Metric   : " << config.runtime_metric << '\n'
               << '\n' << table_separator << '\n'
               << "  " << std::left << std::setw(14) << "Grid"
-              << std::right << std::setw(16) << "Comp. Mean (s)"
-              << std::setw(20) << "Std. Dev. (s)"
+              << std::right << std::setw(17) << "Comp. Median (s)"
+              << std::setw(15) << "Comp. Mean (s)"
+              << std::setw(16) << "Std. Dev. (s)"
               << std::setw(12) << "Growth"
               << std::setw(10) << "Status" << '\n'
               << table_separator << '\n'
@@ -114,8 +115,9 @@ void print_summary(const std::vector<ExperimentResult>& results,
         std::ostringstream grid_label;
         grid_label << result.n << " x " << result.n;
         std::cout << "  " << std::left << std::setw(14) << grid_label.str()
-                  << std::right << std::setw(16) << result.computation_time
-                  << std::setw(20) << result.computation_stddev;
+                  << std::right << std::setw(17) << result.computation_time
+                  << std::setw(15) << result.computation_mean
+                  << std::setw(16) << result.computation_stddev;
 
         if (result.growth > 0.0) {
             std::ostringstream growth;
@@ -149,8 +151,10 @@ void write_e1_csv(const std::vector<ExperimentResult>& results,
     }
 
     file << "grid_size,dx,dy,dt,simulated_time,num_steps,repetitions,"
-            "initialization_mean_s,computation_mean_s,computation_stddev_s,"
-            "validation_mean_s,total_mean_s,runtime_growth,min_temperature,"
+            "initialization_median_s,initialization_mean_s,"
+            "computation_median_s,computation_mean_s,computation_stddev_s,"
+            "validation_median_s,validation_mean_s,"
+            "total_median_s,total_mean_s,runtime_growth,min_temperature,"
             "max_temperature,max_boundary_error,validation_passed\n";
     file << std::setprecision(12);
 
@@ -162,10 +166,14 @@ void write_e1_csv(const std::vector<ExperimentResult>& results,
              << result.parameters.simulated_time << ','
              << kSteps << ',' << kRepeats << ','
              << result.initialization_time << ','
+             << result.initialization_mean << ','
              << result.computation_time << ','
+             << result.computation_mean << ','
              << result.computation_stddev << ','
              << result.validation_time << ','
+             << result.validation_mean << ','
              << result.total_time << ','
+             << result.total_mean << ','
              << result.growth << ','
              << result.validation.min_temperature << ','
              << result.validation.max_temperature << ','
@@ -179,9 +187,9 @@ void print_strong_scaling_summary(
     double serial_baseline_seconds)
 {
     constexpr char separator[] =
-        "==============================================================================================================";
+        "======================================================================================================================================";
     constexpr char table_separator[] =
-        "--------------------------------------------------------------------------------------------------------------";
+        "--------------------------------------------------------------------------------------------------------------------------------------";
 
     if (results.empty()) {
         throw std::invalid_argument("Cannot print an empty E2 summary.");
@@ -211,6 +219,8 @@ void print_strong_scaling_summary(
               << std::setw(13) << "Process Grid"
               << std::right << std::setw(16) << "Median (s)"
               << std::setw(15) << "Halo (s)"
+               << std::setw(15) << "FTCS (s)"
+               << std::setw(14) << "Halo %"
               << std::setw(15) << "MPI Speedup"
               << std::setw(16) << "Serial Speedup"
               << std::setw(15) << "Efficiency"
@@ -228,6 +238,8 @@ void print_strong_scaling_summary(
                   << std::setw(13) << process_grid.str()
                   << std::right << std::setw(16) << result.runtime_median
                   << std::setw(15) << result.halo_runtime_median
+                   << std::setw(15) << result.ftcs_median
+                   << std::setw(13) << result.halo_ratio_median * 100.0 << '%'
                   << std::setw(15) << result.speedup_mpi
                   << std::setw(16) << result.speedup_serial
                   << std::setw(15) << efficiency.str()
@@ -260,6 +272,8 @@ void write_e2_csv(const std::vector<MpiExperimentResult>& results,
         if (!write_header) {
             std::getline(existing, line);
             const auto header = split_csv_row(line);
+            if (std::find(header.begin(), header.end(), "initialization_median_s") == header.end())
+                throw std::runtime_error("Existing E2 CSV has old schema; archive it before a new run: " + path);
             const std::size_t ranks_column = column_index(header, "ranks", path);
             while (std::getline(existing, line)) {
                 const auto fields = split_csv_row(line);
@@ -285,6 +299,9 @@ void write_e2_csv(const std::vector<MpiExperimentResult>& results,
     if (write_header) {
         file << "global_nx,global_ny,ranks,process_rows,process_cols,steps,repetitions,"
                 "runtime_median_s,runtime_min_s,runtime_max_s,halo_runtime_median_s,"
+                 "initialization_median_s,initialization_mean_s,solver_mean_s,solver_stddev_s,"
+                 "ftcs_median_s,ftcs_mean_s,halo_mean_s,validation_median_s,validation_mean_s,"
+                 "total_median_s,total_mean_s,halo_ratio_median,"
                 "speedup_mpi,speedup_serial,parallel_efficiency,"
                 "min_temperature,max_temperature,max_boundary_error,validation_passed\n";
     }
@@ -296,7 +313,14 @@ void write_e2_csv(const std::vector<MpiExperimentResult>& results,
              << result.process_cols << ',' << result.steps << ','
              << result.repetitions << ',' << result.runtime_median << ','
              << result.runtime_min << ',' << result.runtime_max << ','
-             << result.halo_runtime_median << ',' << result.speedup_mpi << ','
+             << result.halo_runtime_median << ','
+             << result.initialization_median << ',' << result.initialization_mean << ','
+             << result.solver_mean << ',' << result.solver_stddev << ','
+             << result.ftcs_median << ',' << result.ftcs_mean << ','
+             << result.halo_mean << ',' << result.validation_median << ','
+             << result.validation_mean << ',' << result.total_median << ','
+             << result.total_mean << ',' << result.halo_ratio_median << ','
+             << result.speedup_mpi << ','
              << result.speedup_serial << ',' << result.parallel_efficiency << ','
              << result.validation.min_temperature << ','
              << result.validation.max_temperature << ','
@@ -308,7 +332,7 @@ void write_e2_csv(const std::vector<MpiExperimentResult>& results,
 double read_e1_serial_baseline(const std::string& path, int grid_size)
 {
     return read_csv_value(path, "grid_size", std::to_string(grid_size),
-                          "computation_mean_s");
+                          "computation_median_s");
 }
 
 std::vector<MpiExperimentResult> read_e2_csv(const std::string& path)
@@ -366,6 +390,23 @@ std::vector<MpiExperimentResult> read_e2_csv(const std::string& path)
         result.process_cols = std::stoi(fields[process_cols]);
         result.steps = std::stoi(fields[steps]);
         result.repetitions = std::stoi(fields[repetitions]);
+        const auto optional_number = [&](const char* name) {
+            const auto found = std::find(header.begin(), header.end(), name);
+            return found == header.end() ? 0.0 :
+                std::stod(fields[static_cast<std::size_t>(found - header.begin())]);
+        };
+        result.initialization_median = optional_number("initialization_median_s");
+        result.initialization_mean = optional_number("initialization_mean_s");
+        result.solver_mean = optional_number("solver_mean_s");
+        result.solver_stddev = optional_number("solver_stddev_s");
+        result.ftcs_median = optional_number("ftcs_median_s");
+        result.ftcs_mean = optional_number("ftcs_mean_s");
+        result.halo_mean = optional_number("halo_mean_s");
+        result.validation_median = optional_number("validation_median_s");
+        result.validation_mean = optional_number("validation_mean_s");
+        result.total_median = optional_number("total_median_s");
+        result.total_mean = optional_number("total_mean_s");
+        result.halo_ratio_median = optional_number("halo_ratio_median");
         result.runtime_median = std::stod(fields[runtime_median]);
         result.runtime_min = std::stod(fields[runtime_min]);
         result.runtime_max = std::stod(fields[runtime_max]);
@@ -394,4 +435,26 @@ double read_e2_single_rank_baseline(const std::string& path)
     return read_csv_value(path, "ranks", "1", "runtime_median_s");
 }
 
+} // namespace heat
+
+namespace heat {
+void write_e2_runs_csv(const std::vector<MpiExperimentResult>& results,
+                       const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path())
+        std::filesystem::create_directories(destination.parent_path());
+    std::ofstream file(path, std::ios::trunc);
+    if (!file) throw std::runtime_error("Cannot open E2 runs CSV: " + path);
+    file << "ranks,repetition,initialization_s,solver_s,halo_s,ftcs_s,"
+            "validation_s,total_s,halo_ratio,validation_passed\n";
+    file << std::setprecision(12);
+    for (const auto& result : results)
+        for (const auto& run : result.runs)
+            file << result.ranks << ',' << run.repetition << ','
+                 << run.initialization << ',' << run.solver << ','
+                 << run.halo << ',' << run.ftcs << ','
+                 << run.validation << ',' << run.total << ','
+                 << run.halo_ratio << ',' << (run.passed ? 1 : 0) << '\n';
+}
 } // namespace heat

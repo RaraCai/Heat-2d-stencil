@@ -98,15 +98,19 @@ heat::ExperimentResult run_experiment(int n)
               << elapsed << " s"
               << "          \n";
 
-    const double avg = heat::mean(compute);
+    const double computation_mean = heat::mean(compute);
 
     return {
         n,
         params,
+        heat::median(init),
         heat::mean(init),
-        avg,
-        heat::sample_stddev(compute, avg),
+        heat::median(compute),
+        computation_mean,
+        heat::sample_stddev(compute, computation_mean),
+        heat::median(validate),
         heat::mean(validate),
+        heat::median(total),
         heat::mean(total),
         0.0,
         {all_passed, lo, hi, boundary_error}
@@ -122,7 +126,7 @@ int main(){
         heat::calculate_growth(results);
         heat::print_summary(results,{
             "E1","SERIAL RUNTIME SCALING",heat::kSteps,heat::kRepeats,
-            "Mean computation time (seconds)",
+            "Median computation time (seconds)",
             "~4.00x (O(N^2), fixed iterations)"
         });
         heat::write_e1_csv(results,"results/raw/e1_serial.csv");

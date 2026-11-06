@@ -16,13 +16,31 @@ struct RunResult {
 struct ExperimentResult {
     int n;
     NumericalParameters parameters;
-    double initialization_time;
-    double computation_time;
-    double computation_stddev;
-    double validation_time;
-    double total_time;
-    double growth;
+    double initialization_time;       // Median
+    double initialization_mean;
+    double computation_time;          // Median; primary runtime metric
+    double computation_mean;
+    double computation_stddev;        // Sample standard deviation around the mean
+    double validation_time;            // Median
+    double validation_mean;
+    double total_time;                 // Median
+    double total_mean;
+    double growth;                     // Ratio of computation medians
     ValidationResult validation;
+};
+
+// One repetition: per-phase max-rank timings; halo_ratio is paired with
+// the rank that had the longest solver time (not max halo / max solver).
+struct MpiRunResult {
+    int repetition;
+    double initialization;
+    double solver;
+    double halo;
+    double ftcs;
+    double validation;
+    double total;
+    double halo_ratio;
+    bool passed;
 };
 
 // E2: aggregated result for one MPI process-count configuration.
@@ -34,6 +52,19 @@ struct MpiExperimentResult {
     int process_cols;
     int steps;
     int repetitions;
+    double initialization_median = 0.0;
+    double initialization_mean = 0.0;
+    double solver_mean = 0.0;
+    double solver_stddev = 0.0;
+    double ftcs_median = 0.0;
+    double ftcs_mean = 0.0;
+    double halo_mean = 0.0;
+    double validation_median = 0.0;
+    double validation_mean = 0.0;
+    double total_median = 0.0;
+    double total_mean = 0.0;
+    double halo_ratio_median = 0.0;
+    std::vector<MpiRunResult> runs;
     double runtime_median;
     double runtime_min;
     double runtime_max;

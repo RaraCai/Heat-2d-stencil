@@ -169,6 +169,7 @@ void solve_mpi(Grid& current, Grid& next,
     }
 
     double local_halo_seconds = 0.0;
+    double local_ftcs_seconds = 0.0;
     for (int step = 0; step < steps; ++step) {
         exchange_halos(current, domain, &local_halo_seconds);
         ftcs_step(current, next, params,
@@ -178,6 +179,7 @@ void solve_mpi(Grid& current, Grid& next,
 
     if (timing != nullptr) {
         timing->halo_exchange_seconds += local_halo_seconds;
+        timing->ftcs_seconds += local_ftcs_seconds;
     }
 }
 

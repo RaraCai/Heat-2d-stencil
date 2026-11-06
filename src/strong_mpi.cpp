@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace {
 
@@ -82,12 +83,8 @@ int main(int argc, char** argv)
         heat::Grid current = heat::make_local_grid(domain);
         heat::Grid next = heat::make_local_grid(domain);
 
-        std::vector<double> total_samples;
-        std::vector<double> halo_samples;
-        if (world_rank == 0) {
-            total_samples.reserve(heat::kE2Repeats);
-            halo_samples.reserve(heat::kE2Repeats);
-        }
+        std::vector<heat::MpiRunResult> runs;
+        if (domain.rank == 0) runs.reserve(heat::kE2Repeats);
 
         bool all_passed = true;
         double global_min = std::numeric_limits<double>::max();
@@ -96,28 +93,45 @@ int main(int argc, char** argv)
         const double experiment_start = MPI_Wtime();
 
         for (int repeat = 0; repeat < heat::kE2Repeats; ++repeat) {
+            // Match E1: initialization through validation, excluding MPI setup/output.
+            MPI_Barrier(domain.cart_comm);
+            const double total_start = MPI_Wtime();
+            const double init_start = MPI_Wtime();
             heat::initialize(current, domain.global_nx, domain.global_ny);
             next.data() = current.data();
+            const double local_init = MPI_Wtime() - init_start;
 
-            heat::MpiTiming timing;
             MPI_Barrier(domain.cart_comm);
-            const double start = MPI_Wtime();
+            const double solver_start = MPI_Wtime();
+            heat::MpiTiming timing;
+            heat::solve_mpi(current, next, params, domain, heat::kSteps, &timing);
+            const double local_solver = MPI_Wtime() - solver_start;
 
-            heat::solve_mpi(current, next, params, domain,
-                            heat::kSteps, &timing);
-
-            const double local_total = MPI_Wtime() - start;
-            double global_total = 0.0;
-            double global_halo = 0.0;
-
-            MPI_Reduce(&local_total, &global_total, 1, MPI_DOUBLE,
-                       MPI_MAX, 0, domain.cart_comm);
-            MPI_Reduce(&timing.halo_exchange_seconds, &global_halo, 1,
-                       MPI_DOUBLE, MPI_MAX, 0, domain.cart_comm);
-
-            // Validation is deliberately outside the timed solve interval.
+            const double validation_start = MPI_Wtime();
             const heat::ValidationResult validation =
                 heat::validate_global(current, domain);
+            const double local_validation = MPI_Wtime() - validation_start;
+            const double local_total = MPI_Wtime() - total_start;
+
+            // Reduce the same phase independently across ranks.
+            const double local_times[6] = {
+                local_init, local_solver, timing.halo_exchange_seconds,
+                timing.ftcs_seconds, local_validation, local_total
+            };
+            double max_times[6] = {};
+            MPI_Reduce(local_times, max_times, 6, MPI_DOUBLE,
+                       MPI_MAX, 0, domain.cart_comm);
+
+            // Select the halo fraction from the rank that determines solver runtime.
+            struct { double value; int rank; } candidate{local_solver, domain.rank};
+            decltype(candidate) critical{};
+            MPI_Allreduce(&candidate, &critical, 1, MPI_DOUBLE_INT,
+                          MPI_MAXLOC, domain.cart_comm);
+            double critical_halo = 0.0;
+            if (domain.rank == critical.rank)
+                critical_halo = timing.halo_exchange_seconds;
+            MPI_Bcast(&critical_halo, 1, MPI_DOUBLE, critical.rank,
+                      domain.cart_comm);
 
             all_passed = all_passed && validation.passed;
             global_min = std::min(global_min, validation.min_temperature);
@@ -125,33 +139,35 @@ int main(int argc, char** argv)
             global_boundary_error = std::max(
                 global_boundary_error, validation.max_boundary_error);
 
-            if (world_rank == 0) {
-                total_samples.push_back(global_total);
-                halo_samples.push_back(global_halo);
-                std::cerr << "\r[E2] Grid "
-                          << std::left << std::setw(11)
-                          << (std::to_string(heat::kE2GlobalNx) + " x " +
-                              std::to_string(heat::kE2GlobalNy))
-                          << " | Ranks " << std::right << std::setw(3)
-                          << world_size << " | Repeat " << std::setw(2)
-                          << repeat + 1 << '/' << heat::kE2Repeats
-                          << std::flush;
+            if (domain.rank == 0) {
+                runs.push_back({repeat + 1, max_times[0], max_times[1],
+                                max_times[2], max_times[3], max_times[4],
+                                max_times[5],
+                                max_times[1] > 0.0 ? critical_halo / max_times[1] : 0.0,
+                                validation.passed});
+                std::cerr << "\r[E2] Ranks " << world_size << " | Repeat "
+                          << repeat + 1 << '/' << heat::kE2Repeats << std::flush;
             }
         }
 
-        if (world_rank == 0) {
-            std::cerr << "\r[E2] Grid "
-                      << std::left << std::setw(11)
-                      << (std::to_string(heat::kE2GlobalNx) + " x " +
-                          std::to_string(heat::kE2GlobalNy))
-                      << " | Ranks " << std::right << std::setw(3) << world_size
-                      << " | " << heat::kE2Repeats << '/' << heat::kE2Repeats
+        if (domain.rank == 0) {
+            std::cerr << "\r[E2] Ranks " << world_size << " | "
+                      << heat::kE2Repeats << '/' << heat::kE2Repeats
                       << " completed | Finished in " << std::fixed
                       << std::setprecision(3) << MPI_Wtime() - experiment_start
                       << " s          \n";
 
-            const auto minmax = std::minmax_element(
-                total_samples.begin(), total_samples.end());
+            std::vector<double> init, solver, halo, ftcs, validation, total, ratios;
+            for (const auto& run : runs) {
+                init.push_back(run.initialization);
+                solver.push_back(run.solver);
+                halo.push_back(run.halo);
+                ftcs.push_back(run.ftcs);
+                validation.push_back(run.validation);
+                total.push_back(run.total);
+                ratios.push_back(run.halo_ratio);
+            }
+            const auto minmax = std::minmax_element(solver.begin(), solver.end());
             heat::MpiExperimentResult result{};
             result.global_nx = heat::kE2GlobalNx;
             result.global_ny = heat::kE2GlobalNy;
@@ -160,12 +176,26 @@ int main(int argc, char** argv)
             result.process_cols = domain.dims[1];
             result.steps = heat::kSteps;
             result.repetitions = heat::kE2Repeats;
-            result.runtime_median = heat::median(total_samples);
+            result.initialization_median = heat::median(init);
+            result.initialization_mean = heat::mean(init);
+            result.runtime_median = heat::median(solver);
+            result.solver_mean = heat::mean(solver);
+            result.solver_stddev = heat::sample_stddev(solver, result.solver_mean);
             result.runtime_min = *minmax.first;
             result.runtime_max = *minmax.second;
-            result.halo_runtime_median = heat::median(halo_samples);
-            result.validation = {
-                all_passed, global_min, global_max, global_boundary_error};
+            result.halo_runtime_median = heat::median(halo);
+            result.halo_mean = heat::mean(halo);
+            result.ftcs_median = heat::median(ftcs);
+            result.ftcs_mean = heat::mean(ftcs);
+            result.validation_median = heat::median(validation);
+            result.validation_mean = heat::mean(validation);
+            result.total_median = heat::median(total);
+            result.total_mean = heat::mean(total);
+            result.halo_ratio_median = heat::median(ratios);
+            result.validation = {all_passed, global_min, global_max,
+                                 global_boundary_error};
+            result.runs = std::move(runs);
+
             const double serial_baseline = heat::read_e1_serial_baseline(
                 heat::kE1BaselineCsv, heat::kE2GlobalNx);
             const double mpi_baseline = world_size == 1
@@ -173,13 +203,13 @@ int main(int argc, char** argv)
                 : heat::read_e2_single_rank_baseline(heat::kE2OutputCsv);
             result.speedup_mpi = mpi_baseline / result.runtime_median;
             result.speedup_serial = serial_baseline / result.runtime_median;
-            result.parallel_efficiency =
-                result.speedup_mpi / static_cast<double>(world_size);
-            heat::write_e2_csv({result}, heat::kE2OutputCsv);
+            result.parallel_efficiency = result.speedup_mpi / world_size;
 
-            if (!all_passed) {
-                exit_code = 2;
-            }
+            // Preserve per-run evidence even when summary output is later analyzed.
+            heat::write_e2_runs_csv({result},
+                "results/raw/e2_runs_rank_" + std::to_string(world_size) + ".csv");
+            heat::write_e2_csv({result}, heat::kE2OutputCsv);
+            if (!all_passed) exit_code = 2;
         }
 
         MPI_Bcast(&exit_code, 1, MPI_INT, 0, domain.cart_comm);

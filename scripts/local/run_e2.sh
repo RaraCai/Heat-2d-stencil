@@ -30,7 +30,7 @@ if [ "${RANKS_TO_RUN[0]}" != 1 ]; then
     RANKS_TO_RUN=(1 "${RANKS_TO_RUN[@]}")
 fi
 
-cmake -S . -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$BUILD_DIR"
 
 mkdir -p results/raw
