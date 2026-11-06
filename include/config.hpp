@@ -24,7 +24,7 @@ inline constexpr std::array<int, 5> kGridSizes{{256, 512, 1024, 2048, 4096}};
 inline constexpr int kE2GlobalNx = 4096;
 inline constexpr int kE2GlobalNy = 4096;
 inline constexpr int kE2Repeats = 10;
-inline constexpr std::array<int, 5> kE2RankCounts{{1, 4, 16, 64, 256, 512}};
+inline constexpr std::array<int, 5> kE2RankCounts{{1, 4, 16, 64, 256}};
 inline constexpr const char* kE1BaselineCsv = "results/raw/e1_serial.csv";
 inline constexpr const char* kE2OutputCsv = "results/raw/e2_strong.csv";
 

@@ -40,14 +40,17 @@ cmake -S . -B build/vanda \
     -DBUILD_TESTING=ON
 
 echo
-echo "Building project..."
+echo "Building Serial target and Core tests..."
 
-cmake --build build/vanda --parallel 1
+cmake --build build/vanda \
+    --target stencil_serial test_core \
+    --parallel 1
 
 echo
 echo "Running core tests..."
 
-ctest --test-dir build/vanda --output-on-failure
+ctest --test-dir build/vanda \
+    -R core_smoke --output-on-failure
 
 echo
 echo "Running E1 Serial Experiment..."
