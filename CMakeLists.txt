@@ -1,24 +1,47 @@
 cmake_minimum_required(VERSION 3.16)
+
 project(Heat2DStencil LANGUAGES CXX)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+find_package(MPI REQUIRED COMPONENTS CXX)
+
 add_library(heat_core STATIC
     src/core/grid.cpp
     src/core/stencil.cpp
     src/core/validation.cpp
     src/core/benchmark.cpp
-    src/core/output.cpp)
+    src/core/output.cpp
+)
 target_include_directories(heat_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(heat_core PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(stencil_serial src/serial.cpp)
 target_link_libraries(stencil_serial PRIVATE heat_core)
 target_compile_options(stencil_serial PRIVATE -Wall -Wextra -Wpedantic)
-# Future targets: stencil_strong_mpi, stencil_weak_mpi, stencil_hybrid.
-# Use find_package(MPI REQUIRED) and find_package(OpenMP REQUIRED) when ready.
+
+add_library(heat_mpi STATIC src/mpi.cpp)
+target_include_directories(heat_mpi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(heat_mpi PUBLIC heat_core MPI::MPI_CXX)
+target_compile_options(heat_mpi PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(stencil_strong_mpi src/strong_mpi.cpp)
+target_link_libraries(stencil_strong_mpi PRIVATE heat_mpi MPI::MPI_CXX)
+target_compile_options(stencil_strong_mpi PRIVATE -Wall -Wextra -Wpedantic)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(test_core tests/test_core.cpp)
     target_link_libraries(test_core PRIVATE heat_core)
     add_test(NAME core_smoke COMMAND test_core)
+
+    add_executable(test_mpi tests/test_mpi.cpp)
+    target_link_libraries(test_mpi PRIVATE heat_mpi MPI::MPI_CXX)
+    add_test(
+        NAME mpi_2d_domain_halo
+        COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi> ${MPIEXEC_POSTFLAGS}
+    )
 endif()
