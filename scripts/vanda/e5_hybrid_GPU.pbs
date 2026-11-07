@@ -68,11 +68,11 @@ fi
 
 echo
 echo "Running GPU correctness tests (distinct from login-node CPU/MPI CTest)..."
-BUILD_DIR="$BUILD_DIR" ./scripts/local/run_e5.sh --test
+BUILD_DIR="$BUILD_DIR" bash ./scripts/local/run_e5.sh --test
 
 echo
 echo "Running the five E5 Group A configurations on one GPU."
-BUILD_DIR="$BUILD_DIR" ./scripts/local/run_e5.sh
+BUILD_DIR="$BUILD_DIR" bash ./scripts/local/run_e5.sh
 
 echo
 echo "Generated E5 GPU results:"
