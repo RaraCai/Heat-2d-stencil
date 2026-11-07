@@ -1,0 +1,114 @@
+#!/bin/bash
+
+#PBS -P personal-linxi.li
+#PBS -N heat_e4_hybrid_cpu
+#PBS -l select=2:ncpus=64:mpiprocs=64:ompthreads=1:mem=8gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+cd "${PBS_O_WORKDIR:?PBS_O_WORKDIR is not set}"
+
+echo "E4 MPI + OpenMP CPU Hybrid"
+echo "Job ID: ${PBS_JOBID}"
+echo "Compute Nodes and Slots:"
+sort "${PBS_NODEFILE}" | uniq -c
+echo "Start Time: $(date)"
+echo "Git Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unavailable)"
+
+source /app1/ebenv
+
+module load GCC/13.3.0
+module load OpenMPI/5.0.3-GCC-13.3.0
+module load CMake/3.29.3-GCCcore-13.3.0
+
+# Required for the PRRTE PBS/TM launcher on Vanda.
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+
+# Bind OpenMP workers to the CPU cores assigned to each MPI rank.
+export OMP_DYNAMIC=FALSE
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+export E4_MPI_BINDING=vanda
+
+echo
+echo "Loaded Modules:"
+module list
+
+echo
+echo "Compiler:"
+g++ --version
+
+echo
+echo "MPI Compiler:"
+which mpicxx
+mpicxx --showme:version
+
+echo
+echo "MPI Runtime:"
+mpirun --version
+
+echo
+echo "CMake:"
+cmake --version
+
+echo
+echo "PBS TM Plugin Dependencies:"
+ldd /app1/ebapps/arches/flat-avx512/software/OpenMPI/5.0.3-GCC-13.3.0/lib/prte/prte_mca_plm_tm.so | grep -E 'libpbs|not found'
+
+echo
+echo "OpenMP Configuration:"
+echo "OMP_DYNAMIC=${OMP_DYNAMIC}"
+echo "OMP_PLACES=${OMP_PLACES}"
+echo "OMP_PROC_BIND=${OMP_PROC_BIND}"
+echo "E4_MPI_BINDING=${E4_MPI_BINDING}"
+
+BUILD_DIR="build/vanda_e4"
+mkdir -p "${BUILD_DIR}" results/raw
+
+echo
+echo "Configuring project..."
+cmake -S . -B "${BUILD_DIR}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=ON
+
+echo
+echo "Building project..."
+cmake --build "${BUILD_DIR}" --parallel 4
+
+echo
+echo "Running project tests..."
+ctest --test-dir "${BUILD_DIR}" --output-on-failure
+
+echo
+echo "Checking Hybrid executable..."
+test -x "${BUILD_DIR}/stencil_hybrid"
+
+echo
+echo "Running complete E4 CPU Hybrid experiment..."
+echo "Total CPU worker counts: 32, 64, 128"
+echo "MPI ranks x OpenMP threads: 15 configurations"
+echo "Iterations: 500; Repetitions per configuration: 10"
+
+# run_e4.sh archives previous E4 CSV files and produces both CSVs.
+BUILD_DIR="${BUILD_DIR}" ./scripts/local/run_e4.sh
+
+echo
+echo "Generated E4 Results:"
+ls -lh results/raw/e4_hybrid.csv results/raw/e4_hybrid_runs.csv
+
+echo
+echo "Checking E4 CSV row counts..."
+summary_rows=$(($(wc -l < results/raw/e4_hybrid.csv) - 1))
+run_rows=$(($(wc -l < results/raw/e4_hybrid_runs.csv) - 1))
+echo "Summary configurations: ${summary_rows}/15"
+echo "Repetition records: ${run_rows}/150"
+if [[ "${summary_rows}" -ne 15 || "${run_rows}" -ne 150 ]]; then
+    echo "Error: E4 CSV output is incomplete." >&2
+    exit 1
+fi
+
+echo
+echo "End Time: $(date)"
+echo "E4 CPU Hybrid completed successfully."
