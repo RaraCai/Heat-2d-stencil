@@ -99,6 +99,9 @@ void calculate_hybrid_metrics(std::vector<HybridExperimentResult>& results)
 void calculate_e5_gpu_metrics(std::vector<GpuHybridExperimentResult>& results)
 {
     for (auto& result : results) {
+        if (result.group != "A") {
+            throw std::runtime_error("E5 GPU supports Group A configurations only.");
+        }
         if (result.solver_time.median <= 0.0 ||
             result.cpu_solver_median <= 0.0) {
             throw std::runtime_error("E5 GPU runtime and CPU baseline must be positive.");
@@ -120,20 +123,6 @@ void calculate_e5_gpu_metrics(std::vector<GpuHybridExperimentResult>& results)
         }
         result.within_group_configuration_speedup =
             group_baseline->solver_time.median / result.solver_time.median;
-
-        const bool shared_across_all_groups =
-            result.mpi_ranks == 8 || result.mpi_ranks == 16 ||
-            result.mpi_ranks == 32;
-        const auto group_a_baseline = std::find_if(
-            results.begin(), results.end(), [&](const auto& candidate) {
-                return candidate.group == "A" &&
-                       candidate.mpi_ranks == result.mpi_ranks;
-            });
-        result.cross_group_gpu_scaling_speedup =
-            shared_across_all_groups && group_a_baseline != results.end()
-                ? group_a_baseline->solver_time.median /
-                      result.solver_time.median
-                : 0.0;
     }
 }
 

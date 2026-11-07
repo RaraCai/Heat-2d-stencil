@@ -2,8 +2,7 @@
 
 #PBS -P personal-linxi.li
 #PBS -N heat_e5_hybrid_gpu
-#PBS -l select=4:ncpus=36:ngpus=1:mpiprocs=36:ompthreads=1
-#PBS -l place=scatter
+#PBS -l select=1:ncpus=36:ngpus=1:mpiprocs=36:ompthreads=1
 #PBS -l walltime=02:00:00
 #PBS -j oe
 
@@ -72,8 +71,7 @@ echo "Running GPU correctness tests (distinct from login-node CPU/MPI CTest)..."
 BUILD_DIR="$BUILD_DIR" ./scripts/local/run_e5.sh --test
 
 echo
-echo "Running E5 A/B/C GPU experiment with one PBS job."
-echo "Group A/B/C use 1/2/4 GPUs respectively; ranks share their node GPU."
+echo "Running the five E5 Group A configurations on one GPU."
 BUILD_DIR="$BUILD_DIR" ./scripts/local/run_e5.sh
 
 echo
@@ -81,7 +79,7 @@ echo "Generated E5 GPU results:"
 ls -lh results/raw/e5_gpu.csv results/raw/e5_gpu_runs.csv
 summary_rows=$(($(wc -l < results/raw/e5_gpu.csv) - 1))
 run_rows=$(($(wc -l < results/raw/e5_gpu_runs.csv) - 1))
-if [[ "$summary_rows" -ne 15 || "$run_rows" -ne 150 ]]; then
+if [[ "$summary_rows" -ne 5 || "$run_rows" -ne 50 ]]; then
     echo "E5 GPU result CSVs are incomplete." >&2
     exit 1
 fi

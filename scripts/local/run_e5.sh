@@ -15,32 +15,22 @@ if [[ ! -x "$EXECUTABLE" ]]; then
 fi
 
 mapfile -t allocated_nodes < <(awk '!seen[$1]++ {print $1}' "${PBS_NODEFILE:?PBS_NODEFILE is not set}")
-if (( ${#allocated_nodes[@]} < 4 )); then
-    echo "E5 GPU requires four allocated GPU nodes; found ${#allocated_nodes[@]}." >&2
+if (( ${#allocated_nodes[@]} != 1 )); then
+    echo "E5 Group A requires exactly one allocated GPU node; found ${#allocated_nodes[@]}." >&2
     exit 1
 fi
 
 hostfile="$(mktemp "${TMPDIR:-/tmp}/e5_gpu_hosts.XXXXXX")"
 trap 'rm -f -- "$hostfile"' EXIT
-
-write_hostfile() {
-    local node_count="$1"
-    local slots="$2"
-    : > "$hostfile"
-    for ((node = 0; node < node_count; ++node)); do
-        printf '%s slots=%s\n' "${allocated_nodes[node]}" "$slots" >> "$hostfile"
-    done
-}
+printf '%s slots=36\n' "${allocated_nodes[0]}" > "$hostfile"
 
 if [[ "$MODE" == "--test" ]]; then
     echo "[E5] GPU reference preflight: one rank / one GPU"
-    write_hostfile 1 36
     mpirun --hostfile "$hostfile" --map-by ppr:1:node --bind-to core \
         -np 1 "$EXECUTABLE" --test
 
-    echo "[E5] GPU reference preflight: four ranks / four GPUs"
-    write_hostfile 4 36
-    mpirun --hostfile "$hostfile" --map-by ppr:1:node --bind-to core \
+    echo "[E5] GPU reference preflight: four ranks sharing one GPU"
+    mpirun --hostfile "$hostfile" --map-by ppr:4:node:PE=1 --bind-to core \
         -np 4 "$EXECUTABLE" --test
     exit 0
 fi
@@ -51,28 +41,24 @@ if [[ -e results/raw/e5_gpu.csv || -e results/raw/e5_gpu_runs.csv ]]; then
 fi
 
 mapfile -t configurations < <("$EXECUTABLE" --list-configurations)
-if (( ${#configurations[@]} != 15 )); then
-    echo "Expected 15 E5 GPU configurations; found ${#configurations[@]}." >&2
+if (( ${#configurations[@]} != 5 )); then
+    echo "Expected five E5 Group A configurations; found ${#configurations[@]}." >&2
     exit 1
 fi
 
 for entry in "${configurations[@]}"; do
-    read -r index group cores gpu_count node_count ranks ranks_per_node \
-        cpu_threads thread_limit <<< "$entry"
-    if (( ranks != node_count * ranks_per_node ||
-          ranks_per_node * cpu_threads > 36 ||
-          gpu_count != node_count )); then
+    read -r index group cores ranks cpu_threads thread_limit <<< "$entry"
+    if [[ "$group" != "A" ]] ||
+       (( ranks * cpu_threads != cores || cores > 36 )); then
         echo "Invalid E5 resource mapping for configuration $index." >&2
         exit 1
     fi
 
-    write_hostfile "$node_count" 36
-    echo "[E5 GPU] Group ${group}: ${cores} CPU cores, ${gpu_count} GPU(s),"
-    echo "          ${node_count} node(s), ${ranks} MPI ranks,"
-    echo "          ${ranks_per_node} ranks/node, ${cpu_threads} CPU threads/rank,"
+    echo "[E5 GPU] Group ${group}: ${cores} CPU cores, one GPU,"
+    echo "          ${ranks} MPI ranks, ${cpu_threads} CPU threads/rank,"
     echo "          GPU thread_limit=${thread_limit}"
     mpirun --hostfile "$hostfile" \
-        --map-by "ppr:${ranks_per_node}:node:PE=${cpu_threads}" \
+        --map-by "ppr:${ranks}:node:PE=${cpu_threads}" \
         --bind-to core --report-bindings \
         -np "$ranks" "$EXECUTABLE" --run "$index"
 done

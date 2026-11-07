@@ -46,10 +46,10 @@ cd Heat-2d-stencil
 # Run E4 first and wait for it to finish.
 qsub scripts/vanda/e4_hybrid_CPU.pbs
 
-# Once E4 has produced all 15 configurations, build E5 and run CPU/MPI CTest.
+# Once E4 has produced its full baseline, build E5 and run CPU/MPI CTest.
 ./scripts/local/build_e5.sh
 
-# Submit the GPU correctness preflight and all E5 production configurations.
+# Submit the single-GPU correctness preflight and E5 Group A configurations.
 qsub scripts/vanda/e5_hybrid_GPU.pbs
 ```
 
@@ -65,13 +65,12 @@ then runs the separate GPU correctness preflight in its GPU allocation before
 starting measurements. Check the PBS job status with `qstat -u "$USER"` and
 read its combined output log for the GPU tests and final summary.
 
-The job requests four nodes, 36 CPU cores and one GPU per node. Group A/B/C
-uses 1/2/4 nodes and GPUs respectively, while retaining the 15 E4 MPI-rank and
-CPU threads-per-rank configurations. Ranks on a node share its GPU at device
-index 0. `gpu_thread_limit` (256) is a separate device-kernel setting; CPU
-threads-per-rank continue to control host rank placement. Static configuration
-checks and runtime rank/node/device checks reject oversubscribed or mismatched
-layouts.
+The job requests one node, 36 CPU cores and one GPU. E5 runs only the five
+Group A MPI-rank and CPU threads-per-rank configurations from E4 (2, 4, 8, 16,
+and 32 ranks); all ranks share GPU device 0. `gpu_thread_limit` (256) is a
+separate device-kernel setting; CPU threads-per-rank continue to control host
+rank placement. Static configuration checks and runtime rank/node/device
+checks reject oversubscribed or mismatched layouts.
 
 The GPU Solver keeps two full grids resident on the GPU for all 500 steps.
 Each step packs owned edges into a small device buffer, copies those edges to
@@ -86,32 +85,29 @@ halo H2D includes host staging and device halo unpacking. The solver wall time
 also includes releasing its resident device buffers.
 
 Before measuring, PBS runs GPU/CPU full-grid comparison tests for odd and even
-step counts with one and four MPI ranks. Each production configuration also
-compares one complete 4096 x 4096, 500-step GPU result with a CPU OpenMP
+step counts with one rank and with four ranks sharing the single GPU. Each
+production configuration also compares one complete 4096 x 4096, 500-step GPU
+result with a CPU OpenMP
 reference using the same MPI decomposition; that correctness run is outside
 the recorded GPU solver time. The comparison reports maximum absolute and
 relative L2 error with fixed tolerances. Every repetition also undergoes
 global physical-boundary/temperature validation. Failed configurations are
 not written as valid timing results.
-The summary and CSV report three distinct speedups:
+The summary and CSV report two speedups:
 
-- **Within-group configuration speedup:** the group's lowest-rank GPU
-  configuration median divided by this configuration's GPU solver median.
-- **Cross-group GPU scaling speedup:** Group A's median at the same MPI rank
-  count divided by this Group A/B/C configuration's median. This is available
-  for shared rank counts 8, 16 and 32; other rows are marked `n/a`.
+- **Within-group configuration speedup:** the 2-rank Group A GPU median
+  divided by this configuration's GPU solver median.
 - **GPU vs CPU E4 speedup:** the matching E4 rank/thread configuration median
   divided by this E5 GPU solver median.
 
-Cross-group results change GPU count, node count and CPU allocation together;
-they are scaling comparisons, not isolated single-variable GPU speedups.
-GPU solver time includes GPU setup, boundary/halo transfers, MPI exchange,
+E5 and E4 Group A use matching CPU rank/thread configurations. GPU solver time
+includes GPU setup, boundary/halo transfers, MPI exchange,
 kernel launch/synchronization and final copy; E4 solver time does not include
 GPU transfers, so this is an end-to-end runtime comparison, not an equal-resource
 CPU/GPU efficiency comparison.
 
 Results are written to `results/raw/e5_gpu.csv` and
-`results/raw/e5_gpu_runs.csv` (15 summary rows and 150 repetition rows). The PBS
+`results/raw/e5_gpu_runs.csv` (5 summary rows and 50 repetition rows). The PBS
 job records its ID, allocated nodes and visible GPU model in its standard job
 log. Existing E5 CSV files cause the run to stop rather than be overwritten;
 move or remove both result files explicitly before starting a fresh run.

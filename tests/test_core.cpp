@@ -154,10 +154,7 @@ bool test_e5_gpu_csv_output()
             heat::GpuHybridExperimentResult result{};
             result.group=config.group;
             result.total_cpu_cores=config.total_cpu_cores;
-            result.gpu_count=config.gpu_count;
-            result.node_count=config.node_count;
             result.mpi_ranks=config.mpi_ranks;
-            result.ranks_per_node=config.ranks_per_node;
             result.gpu_device_index=config.gpu_device_index;
             result.cpu_threads_per_rank=config.cpu_threads_per_rank;
             result.gpu_thread_limit=config.thread_limit;
@@ -166,8 +163,7 @@ bool test_e5_gpu_csv_output()
             result.steps=heat::kE5Steps;
             result.repetitions=heat::kE5Repeats;
             result.cpu_solver_median=2.0;
-            const double runtime=config.group[0]=='A'?1.0:
-                config.group[0]=='B'?0.5:0.25;
+            const double runtime=2.0/config.mpi_ranks;
             result.solver_time={runtime,runtime+0.1,0.1};
             result.mpi_halo_time={0.1,0.1,0.01};
             result.gpu_compute_time={0.2,0.2,0.02};
@@ -181,7 +177,7 @@ bool test_e5_gpu_csv_output()
             for(int repetition=1;repetition<=heat::kE5Repeats;++repetition) {
                 heat::GpuHybridRunResult run{};
                 run.repetition=repetition;
-                run.solver_time=1.0;
+                run.solver_time=runtime;
                 run.passed=true;
                 result.runs.push_back(run);
             }
@@ -191,14 +187,6 @@ bool test_e5_gpu_csv_output()
 
         auto results=heat::read_e5_gpu_csv(summary_path.string());
         heat::calculate_e5_gpu_metrics(results);
-        const auto group_b_8=std::find_if(results.begin(),results.end(),
-            [](const auto& result) {
-                return result.group=="B"&&result.mpi_ranks==8;
-            });
-        const auto group_c_8=std::find_if(results.begin(),results.end(),
-            [](const auto& result) {
-                return result.group=="C"&&result.mpi_ranks==8;
-            });
         std::ifstream summary_file(summary_path);
         std::ifstream runs_file(runs_path);
         std::string line;
@@ -220,16 +208,16 @@ bool test_e5_gpu_csv_output()
         std::cout.rdbuf(original_buffer);
         original_buffer=nullptr;
         passed=results.size()==heat::kE5GpuConfigurations.size() &&
+            results.front().group=="A" &&
             results.front().mpi_ranks==heat::kE5GpuConfigurations.front().mpi_ranks &&
+            results.front().cpu_gpu_speedup==2.0 &&
             results.front().within_group_configuration_speedup==1.0 &&
-            results.front().cross_group_gpu_scaling_speedup==0.0 &&
-            group_b_8!=results.end()&&
-            group_b_8->cross_group_gpu_scaling_speedup==2.0&&
-            group_c_8!=results.end()&&
-            group_c_8->cross_group_gpu_scaling_speedup==4.0&&
-            summary_lines==16 && run_lines==151 && duplicate_rejected &&
-            summary.str().find("E5 | MPI + OPENMP GPU HYBRID")!=std::string::npos &&
-            summary.str().find("Cross-Group")!=std::string::npos &&
+            results.back().within_group_configuration_speedup==16.0 &&
+            summary_lines==6 && run_lines==51 && duplicate_rejected &&
+            summary.str().find("E5 | GROUP A MPI + OPENMP GPU HYBRID")!=std::string::npos &&
+            summary.str().find("Cross-Group")==std::string::npos &&
+            summary.str().find("Group B")==std::string::npos &&
+            summary.str().find("Group C")==std::string::npos &&
             summary.str().find("ALL PASSED")!=std::string::npos;
     } catch(...) {
         if(original_buffer)std::cout.rdbuf(original_buffer);

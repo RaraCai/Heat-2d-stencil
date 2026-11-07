@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -31,17 +30,6 @@ const Configuration& configuration_at(int index)
     return heat::kE5GpuConfigurations[static_cast<std::size_t>(index)];
 }
 
-int visible_cuda_device_count()
-{
-    const char* visible = std::getenv("CUDA_VISIBLE_DEVICES");
-    if (visible == nullptr || *visible == '\0') return -1;
-    int count = 1;
-    for (const char* cursor = visible; *cursor != '\0'; ++cursor) {
-        if (*cursor == ',') ++count;
-    }
-    return count;
-}
-
 void validate_gpu_mapping(const Configuration& config, int& device,
                           MPI_Comm& node_comm, int world_rank)
 {
@@ -52,18 +40,8 @@ void validate_gpu_mapping(const Configuration& config, int& device,
     MPI_Comm_rank(node_comm, &local_rank);
     MPI_Comm_size(node_comm, &local_size);
 
-    const int devices_per_node = config.gpu_count / config.node_count;
-    const int process_visible_devices = omp_get_num_devices();
-    int local_ok = local_size == config.ranks_per_node &&
-                   process_visible_devices > config.gpu_device_index;
-    const int visible_count = visible_cuda_device_count();
-    if (visible_count >= 0 &&
-        visible_count != devices_per_node) {
-        local_ok = 0;
-    } else if (visible_count < 0 &&
-               process_visible_devices != devices_per_node) {
-        local_ok = 0;
-    }
+    int local_ok = local_size == config.mpi_ranks &&
+                   omp_get_num_devices() == 1;
     device = config.gpu_device_index;
     if (local_ok) omp_set_default_device(device);
 
@@ -85,23 +63,11 @@ void validate_gpu_mapping(const Configuration& config, int& device,
                   MPI_COMM_WORLD);
     MPI_Allreduce(&local_ok, &all_ranks_ok, 1, MPI_INT, MPI_MIN,
                   MPI_COMM_WORLD);
-    if (actual_nodes != config.node_count || !all_ranks_ok) {
+    if (actual_nodes != 1 || !all_ranks_ok) {
         throw std::runtime_error(
-            "E5 GPU allocation, rank placement, or OpenMP device mapping "
-            "does not match this configuration.");
+            "E5 requires one node and one GPU shared by all MPI ranks.");
     }
 
-    int local_cuda_visible = visible_count;
-    int min_visible = 0;
-    int max_visible = 0;
-    MPI_Allreduce(&local_cuda_visible, &min_visible, 1, MPI_INT, MPI_MIN,
-                  MPI_COMM_WORLD);
-    MPI_Allreduce(&local_cuda_visible, &max_visible, 1, MPI_INT, MPI_MAX,
-                  MPI_COMM_WORLD);
-    if (min_visible >= 0 && max_visible >= 0 && min_visible != max_visible) {
-        throw std::runtime_error(
-            "Ranks report different CUDA_VISIBLE_DEVICES allocations.");
-    }
 }
 
 heat::ReferenceComparison run_reference_cases(const Configuration& config,
@@ -198,9 +164,7 @@ void print_configurations()
     for (std::size_t i = 0; i < heat::kE5GpuConfigurations.size(); ++i) {
         const auto& config = heat::kE5GpuConfigurations[i];
         std::cout << i << ' ' << config.group << ' '
-                  << config.total_cpu_cores << ' ' << config.gpu_count << ' '
-                  << config.node_count << ' ' << config.mpi_ranks << ' '
-                  << config.ranks_per_node << ' '
+                  << config.total_cpu_cores << ' ' << config.mpi_ranks << ' '
                   << config.cpu_threads_per_rank << ' '
                   << config.thread_limit << '\n';
     }
@@ -360,10 +324,7 @@ void run_configuration(int index, int& argc, char**& argv)
             heat::GpuHybridExperimentResult result{};
             result.group = config.group;
             result.total_cpu_cores = config.total_cpu_cores;
-            result.gpu_count = config.gpu_count;
-            result.node_count = config.node_count;
             result.mpi_ranks = config.mpi_ranks;
-            result.ranks_per_node = config.ranks_per_node;
             result.gpu_device_index = config.gpu_device_index;
             result.cpu_threads_per_rank = config.cpu_threads_per_rank;
             result.gpu_thread_limit = config.thread_limit;
@@ -411,14 +372,12 @@ void run_configuration(int index, int& argc, char**& argv)
             result.cpu_gpu_speedup = calculated->cpu_gpu_speedup;
             result.within_group_configuration_speedup =
                 calculated->within_group_configuration_speedup;
-            result.cross_group_gpu_scaling_speedup =
-                calculated->cross_group_gpu_scaling_speedup;
             heat::append_e5_gpu_csv(result, heat::kE5GpuOutputCsv);
             heat::append_e5_gpu_runs_csv(result, heat::kE5GpuRunsCsv);
             std::cerr << "\r[E5 GPU] Group " << config.group
                       << " | " << config.mpi_ranks << " ranks x "
                       << config.cpu_threads_per_rank << " threads/rank"
-                      << " | " << config.gpu_count << " GPU(s)"
+                      << " | 1 GPU"
                       << " | Median solver " << std::fixed
                       << std::setprecision(3) << result.solver_time.median
                       << " s | CPU/GPU " << std::setprecision(3)
@@ -440,7 +399,7 @@ void print_summary()
 {
     auto results = heat::read_e5_gpu_csv(heat::kE5GpuOutputCsv);
     if (results.size() != heat::kE5GpuConfigurations.size()) {
-        throw std::runtime_error("E5 GPU summary requires all 15 configurations.");
+        throw std::runtime_error("E5 GPU summary requires all five Group A configurations.");
     }
     heat::calculate_e5_gpu_metrics(results);
     heat::print_e5_gpu_summary(results);

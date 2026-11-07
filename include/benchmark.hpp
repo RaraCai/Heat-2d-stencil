@@ -145,10 +145,7 @@ struct GpuHybridRunResult {
 struct GpuHybridExperimentResult {
     std::string group;
     int total_cpu_cores = 0;
-    int gpu_count = 0;
-    int node_count = 0;
     int mpi_ranks = 0;
-    int ranks_per_node = 0;
     int gpu_device_index = 0;
     int cpu_threads_per_rank = 0;
     int gpu_thread_limit = 0;
@@ -159,7 +156,6 @@ struct GpuHybridExperimentResult {
     double cpu_solver_median = 0.0;
     double cpu_gpu_speedup = 0.0;
     double within_group_configuration_speedup = 0.0;
-    double cross_group_gpu_scaling_speedup = 0.0;
     TimingStatistics solver_time;
     TimingStatistics mpi_halo_time;
     TimingStatistics gpu_compute_time;
