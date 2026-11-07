@@ -30,11 +30,29 @@ for configuration in \
     echo "[E4] Running with ${ranks} MPI ranks x ${threads} OpenMP threads"
 
     if [[ "${E4_MPI_BINDING:-local}" == "vanda" ]]; then
-        mpirun --map-by "slot:PE=${threads}" --bind-to core \
-            -np "$ranks" "$BUILD_DIR/stencil_hybrid" --run "$ranks" "$threads"
+
+        # Distribute MPI ranks across 4 Vanda compute nodes.
+        # Each node has 36 allocated CPU cores.
+        if (( ranks == 2 )); then
+            ranks_per_node=2
+        else
+            ranks_per_node=$((ranks / 4))
+        fi
+
+        echo "[E4] Mapping: ${ranks_per_node} ranks per node"
+        echo "[E4] CPU cores per rank: ${threads}"
+
+        mpirun \
+            --map-by "ppr:${ranks_per_node}:node:PE=${threads}" \
+            --bind-to core \
+            --report-bindings \
+            -np "$ranks" \
+            "$BUILD_DIR/stencil_hybrid" --run "$ranks" "$threads"
+
     else
         mpirun --oversubscribe --bind-to none \
-            -np "$ranks" "$BUILD_DIR/stencil_hybrid" --run "$ranks" "$threads"
+            -np "$ranks" \
+            "$BUILD_DIR/stencil_hybrid" --run "$ranks" "$threads"
     fi
 done
 

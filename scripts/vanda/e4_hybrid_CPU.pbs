@@ -2,7 +2,8 @@
 
 #PBS -P personal-linxi.li
 #PBS -N heat_e4_hybrid_cpu
-#PBS -l select=2:ncpus=64:mpiprocs=64:ompthreads=1:mem=8gb
+#PBS -l select=4:ncpus=36:mpiprocs=36:ompthreads=1:mem=8gb
+#PBS -l place=scatter
 #PBS -l walltime=02:00:00
 #PBS -j oe
 

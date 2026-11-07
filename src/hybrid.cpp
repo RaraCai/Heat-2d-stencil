@@ -4,6 +4,7 @@
 #include "output.hpp"
 #include "stencil.hpp"
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <iomanip>
 #include <iostream>
@@ -52,8 +53,27 @@ int main(int argc, char** argv)
                 if (found == results.end()) {
                     throw std::runtime_error("E4 summary is missing a required configuration.");
                 }
+                if (found->repetitions != heat::kE4Repeats) {
+                    throw std::runtime_error(
+                        "E4 configuration does not contain the required number of repetitions.");
+                }
+                if (!std::isfinite(found->solver_median) || found->solver_median <= 0.0) {
+                    throw std::runtime_error(
+                        "E4 configuration contains an invalid solver median.");
+                }
             }
             heat::calculate_hybrid_metrics(results);
+            for (const auto& result : results) {
+                if (!std::isfinite(result.configuration_speedup) ||
+                    !std::isfinite(result.hybrid_speedup) ||
+                    !std::isfinite(result.parallel_efficiency) ||
+                    result.configuration_speedup <= 0.0 ||
+                    result.hybrid_speedup <= 0.0 ||
+                    result.parallel_efficiency <= 0.0) {
+                    throw std::runtime_error(
+                        "E4 metric calculation produced an invalid speedup or efficiency.");
+                }
+            }
             heat::write_e4_csv(results, heat::kE4OutputCsv);
             heat::print_hybrid_summary(results);
             return std::all_of(results.begin(), results.end(), [](const auto& result) {
@@ -191,14 +211,6 @@ int main(int argc, char** argv)
         }
 
         if (domain.rank == 0) {
-            std::cerr << "\r[E4] Cores " << configuration->total_cores
-                      << " | Ranks " << configuration->ranks
-                      << " | Threads/Rank " << configuration->threads_per_rank
-                      << " | " << heat::kE4Repeats << '/' << heat::kE4Repeats
-                      << " completed | Finished in " << std::fixed
-                      << std::setprecision(3) << MPI_Wtime() - experiment_start
-                      << " s          \n";
-
             std::vector<double> initialization, solver, halo, ftcs;
             std::vector<double> validation, total, halo_ratio;
             for (const auto& run : runs) {
@@ -243,6 +255,16 @@ int main(int argc, char** argv)
 
             heat::append_e4_runs_csv(result, heat::kE4RunsCsv);
             heat::append_e4_csv(result, heat::kE4OutputCsv);
+
+            // Report completion only after both result files were written successfully.
+            std::cerr << "\r[E4] Cores " << configuration->total_cores
+                      << " | Ranks " << configuration->ranks
+                      << " | Threads/Rank " << configuration->threads_per_rank
+                      << " | " << heat::kE4Repeats << '/' << heat::kE4Repeats
+                      << " completed | Finished in " << std::fixed
+                      << std::setprecision(3) << MPI_Wtime() - experiment_start
+                      << " s          \n";
+
             if (!all_passed) exit_code = 2;
         }
 
