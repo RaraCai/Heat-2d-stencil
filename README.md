@@ -1,9 +1,9 @@
-# Heat 2D Stencil — E1–E4-ready refactor
+# Heat 2D Stencil — E1–E5 experiments
 
 C++17, Linux/WSL, CMake + Ninja. `heat_core` contains shared grid, initialization,
 FTCS step, validation, benchmark statistics and CSV output. E1, MPI E2 strong
-scaling, MPI E3 weak scaling, and E4 MPI + OpenMP CPU/GPU experiments are
-implemented.
+scaling, MPI E3 weak scaling, E4 MPI + OpenMP CPU, and E5 MPI + OpenMP GPU
+experiments are implemented.
 
 ## Build and run
 
@@ -35,41 +35,86 @@ first. Each rank owns a fixed 256 x 256 grid, while the global grid scales from
 held fixed. Results are written to `results/raw/e3_weak.csv`.
 On Vanda, submit the full E3 job with `qsub scripts/vanda/e3_weak.pbs`.
 
-The E4 CPU experiment remains unchanged and is submitted with
-`qsub scripts/vanda/e4_hybrid_CPU.pbs`. For E4 GPU strong scaling, submit
-`qsub scripts/vanda/e4_hybrid_GPU.pbs` after the CPU E4 job has completed.
-The GPU script requires all 15 rows in `results/raw/e4_hybrid.csv`; it does not
-modify or rerun the CPU experiment. It requests the same four nodes and CPU
-slots as the CPU job, plus one GPU per node. It then runs the same 15 MPI-rank
-and OpenMP-thread configurations, with the same grid, iteration count, and
-repetitions, using the CPU E4 rank placement. MPI ranks on each node share that
-node's single GPU; the 2-rank configuration follows the CPU script's placement
-and uses one node/GPU, while the other configurations use all four nodes/GPUs.
-Each rank selects device 0 on its node, exchanges MPI halos on the host, and
-offloads the FTCS update to the GPU. The host/device mapping is performed per
-step, leaving the CPU E4 design and MPI halo/grid-swap sequence unchanged.
+The E4 CPU experiment is unchanged and is submitted with
+`qsub scripts/vanda/e4_hybrid_CPU.pbs`. E5 uses a Login Node build script and a
+single PBS job for GPU correctness tests and measurements. From a fresh clone:
 
-`results/raw/e4_gpu.csv` stores each GPU configuration beside its matching CPU
-solver median and the per-configuration speedup (`CPU solver median / GPU
-solver median`). It contains one summary row for each of the 15 configurations.
-`results/raw/e4_gpu_runs.csv` stores the 10 individual repetitions for each
-configuration.
-The GPU version retains the CPU `threads per rank` setting to match
-configurations; GPU kernel parallelism itself is provided by OpenMP target
-teams, not by that host-thread count. The first GPU configuration replaces
-both GPU result files on a new run; the PBS script does not archive older GPU
-CSV files.
+```bash
+git clone https://github.com/5555555559/Heat-2d-stencil.git
+cd Heat-2d-stencil
 
-The GPU job requires Vanda's GCC 13.3.0 compiler to have GCC `nvptx-none`
-OpenMP offload support, and available NVIDIA GPUs on the requested nodes. If
-the nvptx toolchain requires a site CUDA module, set `CUDA_MODULE` when
-submitting with the module name provided by Vanda (for example,
-`qsub -v CUDA_MODULE=CUDA/<version> scripts/vanda/e4_hybrid_GPU.pbs`).
-`OMP_TARGET_OFFLOAD=MANDATORY` and an
-in-program device check make the job fail rather than silently running the
-kernel on the CPU. The results are written to `results/raw/e4_gpu.csv`.
-The 10-per-configuration timing records are written to
-`results/raw/e4_gpu_runs.csv`.
+# Run E4 first and wait for it to finish.
+qsub scripts/vanda/e4_hybrid_CPU.pbs
+
+# Once E4 has produced all 15 configurations, build E5 and run CPU/MPI CTest.
+./scripts/local/build_e5.sh
+
+# Submit the GPU correctness preflight and all E5 production configurations.
+qsub scripts/vanda/e5_hybrid_GPU.pbs
+```
+
+`scripts/local/build_e5.sh` automatically loads the validated GCC 13.2.0,
+NVHPC 24.7-CUDA-12.3.0, OpenMPI 4.1.6-GCC-13.2.0 and
+CMake 3.27.6-GCCcore-13.2.0 modules; sets `OMPI_CXX` to `nvc++`; verifies the
+E4 CSV contains all 15 configurations; and builds into `build/vanda_gpu/` with
+NVHPC `-mp=gpu -gpu=cc86`. It runs CPU/MPI CTest on the Login Node. No manual
+GPU environment setup is required.
+
+The PBS job does not compile. It rechecks the E4 baseline and built executables,
+then runs the separate GPU correctness preflight in its GPU allocation before
+starting measurements. Check the PBS job status with `qstat -u "$USER"` and
+read its combined output log for the GPU tests and final summary.
+
+The job requests four nodes, 36 CPU cores and one GPU per node. Group A/B/C
+uses 1/2/4 nodes and GPUs respectively, while retaining the 15 E4 MPI-rank and
+CPU threads-per-rank configurations. Ranks on a node share its GPU at device
+index 0. `gpu_thread_limit` (256) is a separate device-kernel setting; CPU
+threads-per-rank continue to control host rank placement. Static configuration
+checks and runtime rank/node/device checks reject oversubscribed or mismatched
+layouts.
+
+The GPU Solver keeps two full grids resident on the GPU for all 500 steps.
+Each step packs owned edges into a small device buffer, copies those edges to
+the host for the existing MPI halo exchange, copies received halos back, then
+launches the FTCS kernel and swaps device-buffer roles. Only setup and the
+final result copy transfer complete grids. Solver time includes setup,
+iterations, halo synchronization and the final copy. The output also separates
+MPI halo, GPU compute/kernel launch, boundary D2H, halo H2D, setup, and final
+copy timing; component maxima are diagnostics and must not be added together
+as a total runtime. Boundary D2H includes device edge packing and host staging;
+halo H2D includes host staging and device halo unpacking. The solver wall time
+also includes releasing its resident device buffers.
+
+Before measuring, PBS runs GPU/CPU full-grid comparison tests for odd and even
+step counts with one and four MPI ranks. Each production configuration also
+compares one complete 4096 x 4096, 500-step GPU result with a CPU OpenMP
+reference using the same MPI decomposition; that correctness run is outside
+the recorded GPU solver time. The comparison reports maximum absolute and
+relative L2 error with fixed tolerances. Every repetition also undergoes
+global physical-boundary/temperature validation. Failed configurations are
+not written as valid timing results.
+The summary and CSV report three distinct speedups:
+
+- **Within-group configuration speedup:** the group's lowest-rank GPU
+  configuration median divided by this configuration's GPU solver median.
+- **Cross-group GPU scaling speedup:** Group A's median at the same MPI rank
+  count divided by this Group A/B/C configuration's median. This is available
+  for shared rank counts 8, 16 and 32; other rows are marked `n/a`.
+- **GPU vs CPU E4 speedup:** the matching E4 rank/thread configuration median
+  divided by this E5 GPU solver median.
+
+Cross-group results change GPU count, node count and CPU allocation together;
+they are scaling comparisons, not isolated single-variable GPU speedups.
+GPU solver time includes GPU setup, boundary/halo transfers, MPI exchange,
+kernel launch/synchronization and final copy; E4 solver time does not include
+GPU transfers, so this is an end-to-end runtime comparison, not an equal-resource
+CPU/GPU efficiency comparison.
+
+Results are written to `results/raw/e5_gpu.csv` and
+`results/raw/e5_gpu_runs.csv` (15 summary rows and 150 repetition rows). The PBS
+job records its ID, allocated nodes and visible GPU model in its standard job
+log. Existing E5 CSV files cause the run to stop rather than be overwritten;
+move or remove both result files explicitly before starting a fresh run.
 
 ## MPI extension contract
 
@@ -85,5 +130,5 @@ The 10-per-configuration timing records are written to
 - Serial and MPI reference comparisons require matching global indexing,
   iteration counts and boundary handling.
 
-The `ftcs_step` kernel is serial by design; the CPU and GPU E4 variants use
-separate OpenMP kernels without changing the physical model.
+The `ftcs_step` kernel is serial by design; E4 CPU and E5 GPU use separate
+OpenMP kernels without changing the physical model.

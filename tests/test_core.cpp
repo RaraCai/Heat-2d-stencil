@@ -3,6 +3,7 @@
 #include "output.hpp"
 #include "stencil.hpp"
 #include "validation.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -139,6 +140,111 @@ bool test_e3_csv_output()
     return passed;
 }
 
+bool test_e5_gpu_csv_output()
+{
+    const auto suffix=std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto directory=std::filesystem::temp_directory_path();
+    const auto summary_path=directory/("heat_e5_summary_"+suffix+".csv");
+    const auto runs_path=directory/("heat_e5_runs_"+suffix+".csv");
+    bool passed=false;
+    std::streambuf* original_buffer=nullptr;
+    try {
+        for(const auto& config:heat::kE5GpuConfigurations) {
+            heat::GpuHybridExperimentResult result{};
+            result.group=config.group;
+            result.total_cpu_cores=config.total_cpu_cores;
+            result.gpu_count=config.gpu_count;
+            result.node_count=config.node_count;
+            result.mpi_ranks=config.mpi_ranks;
+            result.ranks_per_node=config.ranks_per_node;
+            result.gpu_device_index=config.gpu_device_index;
+            result.cpu_threads_per_rank=config.cpu_threads_per_rank;
+            result.gpu_thread_limit=config.thread_limit;
+            result.process_rows=1;
+            result.process_cols=config.mpi_ranks;
+            result.steps=heat::kE5Steps;
+            result.repetitions=heat::kE5Repeats;
+            result.cpu_solver_median=2.0;
+            const double runtime=config.group[0]=='A'?1.0:
+                config.group[0]=='B'?0.5:0.25;
+            result.solver_time={runtime,runtime+0.1,0.1};
+            result.mpi_halo_time={0.1,0.1,0.01};
+            result.gpu_compute_time={0.2,0.2,0.02};
+            result.boundary_d2h_time={0.03,0.03,0.003};
+            result.halo_h2d_time={0.04,0.04,0.004};
+            result.gpu_setup_time={0.05,0.05,0.005};
+            result.gpu_final_copy_time={0.06,0.06,0.006};
+            result.max_absolute_error=1e-10;
+            result.relative_l2_error=1e-12;
+            result.validation={true,20.0,99.0,0.0};
+            for(int repetition=1;repetition<=heat::kE5Repeats;++repetition) {
+                heat::GpuHybridRunResult run{};
+                run.repetition=repetition;
+                run.solver_time=1.0;
+                run.passed=true;
+                result.runs.push_back(run);
+            }
+            heat::append_e5_gpu_csv(result,summary_path.string());
+            heat::append_e5_gpu_runs_csv(result,runs_path.string());
+        }
+
+        auto results=heat::read_e5_gpu_csv(summary_path.string());
+        heat::calculate_e5_gpu_metrics(results);
+        const auto group_b_8=std::find_if(results.begin(),results.end(),
+            [](const auto& result) {
+                return result.group=="B"&&result.mpi_ranks==8;
+            });
+        const auto group_c_8=std::find_if(results.begin(),results.end(),
+            [](const auto& result) {
+                return result.group=="C"&&result.mpi_ranks==8;
+            });
+        std::ifstream summary_file(summary_path);
+        std::ifstream runs_file(runs_path);
+        std::string line;
+        int summary_lines=0;
+        while(std::getline(summary_file,line))++summary_lines;
+        int run_lines=0;
+        while(std::getline(runs_file,line))++run_lines;
+
+        bool duplicate_rejected=false;
+        try {
+            heat::append_e5_gpu_csv(results.front(),summary_path.string());
+        } catch(const std::runtime_error&) {
+            duplicate_rejected=true;
+        }
+
+        std::ostringstream summary;
+        original_buffer=std::cout.rdbuf(summary.rdbuf());
+        heat::print_e5_gpu_summary(results);
+        std::cout.rdbuf(original_buffer);
+        original_buffer=nullptr;
+        passed=results.size()==heat::kE5GpuConfigurations.size() &&
+            results.front().mpi_ranks==heat::kE5GpuConfigurations.front().mpi_ranks &&
+            results.front().within_group_configuration_speedup==1.0 &&
+            results.front().cross_group_gpu_scaling_speedup==0.0 &&
+            group_b_8!=results.end()&&
+            group_b_8->cross_group_gpu_scaling_speedup==2.0&&
+            group_c_8!=results.end()&&
+            group_c_8->cross_group_gpu_scaling_speedup==4.0&&
+            summary_lines==16 && run_lines==151 && duplicate_rejected &&
+            summary.str().find("E5 | MPI + OPENMP GPU HYBRID")!=std::string::npos &&
+            summary.str().find("Cross-Group")!=std::string::npos &&
+            summary.str().find("ALL PASSED")!=std::string::npos;
+    } catch(...) {
+        if(original_buffer)std::cout.rdbuf(original_buffer);
+        std::error_code error;
+        std::filesystem::remove(summary_path,error);
+        std::filesystem::remove(runs_path,error);
+        throw;
+    }
+
+    std::error_code error;
+    std::filesystem::remove(summary_path,error);
+    std::filesystem::remove(runs_path,error);
+    return passed;
+}
+
 bool test_fixed_spacing_parameters_and_initialization()
 {
     const auto anisotropic=heat::make_parameters(32,48,20,0.01,0.02);
@@ -209,6 +315,7 @@ int main(){
     heat::Grid local(8,8,1,10,10);
     heat::initialize(local,64,64);
     if(!test_e2_csv_output()||!test_e3_csv_output()||
+       !test_e5_gpu_csv_output()||
        !test_fixed_spacing_parameters_and_initialization())return 1;
     std::cout<<"PASS core smoke test\n";
 }

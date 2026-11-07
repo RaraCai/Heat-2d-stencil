@@ -9,14 +9,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
-option(HEAT_OPENMP_OFFLOAD "Compile OpenMP target regions for NVIDIA GPUs with GCC" OFF)
-if(HEAT_OPENMP_OFFLOAD)
-    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        message(FATAL_ERROR "HEAT_OPENMP_OFFLOAD currently requires GCC with nvptx offload support")
-    endif()
-    add_compile_options(-foffload=nvptx-none)
-    add_link_options(-foffload=nvptx-none)
-endif()
+option(HEAT_ENABLE_NVHPC_GPU "Build E5 with NVHPC OpenMP GPU offload" OFF)
+set(HEAT_NVHPC_GPU_ARCH "cc86" CACHE STRING "NVHPC GPU architecture (for example cc86)")
 
 add_library(heat_core STATIC
     src/core/grid.cpp
@@ -50,9 +44,26 @@ add_executable(stencil_hybrid src/hybrid.cpp)
 target_link_libraries(stencil_hybrid PRIVATE heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
 target_compile_options(stencil_hybrid PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(heat_gpu STATIC
+    src/gpu/solver.cpp
+    src/gpu/stencil.cpp
+)
+target_include_directories(heat_gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(heat_gpu PUBLIC heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
+target_compile_options(heat_gpu PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(stencil_hybrid_gpu src/hybrid_gpu.cpp)
-target_link_libraries(stencil_hybrid_gpu PRIVATE heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
+target_link_libraries(stencil_hybrid_gpu PRIVATE heat_gpu heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
 target_compile_options(stencil_hybrid_gpu PRIVATE -Wall -Wextra -Wpedantic)
+
+if(HEAT_ENABLE_NVHPC_GPU)
+    foreach(target heat_gpu stencil_hybrid_gpu)
+        target_compile_options(${target} PRIVATE
+            -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
+        target_link_options(${target} PRIVATE
+            -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
+    endforeach()
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -67,4 +78,25 @@ if(BUILD_TESTING)
         COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
                 ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi> ${MPIEXEC_POSTFLAGS}
     )
+
+    add_executable(test_gpu tests/test_gpu.cpp)
+    target_link_libraries(test_gpu PRIVATE heat_gpu MPI::MPI_CXX OpenMP::OpenMP_CXX)
+    target_compile_options(test_gpu PRIVATE -Wall -Wextra -Wpedantic)
+    if(HEAT_ENABLE_NVHPC_GPU)
+        target_compile_options(test_gpu PRIVATE -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
+        target_link_options(test_gpu PRIVATE -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
+    else()
+        add_test(
+            NAME gpu_resident_host_reference_single_rank
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1
+                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_gpu>
+                    --host-fallback ${MPIEXEC_POSTFLAGS}
+        )
+        add_test(
+            NAME gpu_resident_host_reference_multi_rank
+            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_gpu>
+                    --host-fallback ${MPIEXEC_POSTFLAGS}
+        )
+    endif()
 endif()

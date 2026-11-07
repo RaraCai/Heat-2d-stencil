@@ -47,4 +47,12 @@ void write_e4_csv(const std::vector<HybridExperimentResult>& results,
                   const std::string& path);
 void print_hybrid_summary(const std::vector<HybridExperimentResult>& results);
 
+void append_e5_gpu_csv(const GpuHybridExperimentResult& result,
+                       const std::string& path);
+void append_e5_gpu_runs_csv(const GpuHybridExperimentResult& result,
+                            const std::string& path);
+std::vector<GpuHybridExperimentResult> read_e5_gpu_csv(const std::string& path);
+void print_e5_gpu_summary(
+    const std::vector<GpuHybridExperimentResult>& results);
+
 } // namespace heat

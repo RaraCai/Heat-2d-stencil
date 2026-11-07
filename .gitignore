@@ -3,3 +3,6 @@ out/
 .vs/
 .vscode/
 results/raw/*.csv
+*.log
+*.o[0-9]*
+*.e[0-9]*

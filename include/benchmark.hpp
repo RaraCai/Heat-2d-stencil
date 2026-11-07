@@ -1,6 +1,7 @@
 #pragma once
 #include "config.hpp"
 #include "validation.hpp"
+#include <string>
 #include <vector>
 
 namespace heat {
@@ -121,10 +122,63 @@ struct HybridExperimentResult {
     std::vector<HybridRunResult> runs;
 };
 
+struct TimingStatistics {
+    double median = 0.0;
+    double mean = 0.0;
+    double stddev = 0.0;
+};
+
+struct GpuHybridRunResult {
+    int repetition = 0;
+    double solver_time = 0.0;
+    double mpi_halo_time = 0.0;
+    double gpu_compute_time = 0.0;
+    double boundary_d2h_time = 0.0;
+    double halo_h2d_time = 0.0;
+    double gpu_setup_time = 0.0;
+    double gpu_final_copy_time = 0.0;
+    double max_absolute_error = 0.0;
+    double relative_l2_error = 0.0;
+    bool passed = false;
+};
+
+struct GpuHybridExperimentResult {
+    std::string group;
+    int total_cpu_cores = 0;
+    int gpu_count = 0;
+    int node_count = 0;
+    int mpi_ranks = 0;
+    int ranks_per_node = 0;
+    int gpu_device_index = 0;
+    int cpu_threads_per_rank = 0;
+    int gpu_thread_limit = 0;
+    int process_rows = 0;
+    int process_cols = 0;
+    int steps = 0;
+    int repetitions = 0;
+    double cpu_solver_median = 0.0;
+    double cpu_gpu_speedup = 0.0;
+    double within_group_configuration_speedup = 0.0;
+    double cross_group_gpu_scaling_speedup = 0.0;
+    TimingStatistics solver_time;
+    TimingStatistics mpi_halo_time;
+    TimingStatistics gpu_compute_time;
+    TimingStatistics boundary_d2h_time;
+    TimingStatistics halo_h2d_time;
+    TimingStatistics gpu_setup_time;
+    TimingStatistics gpu_final_copy_time;
+    double max_absolute_error = 0.0;
+    double relative_l2_error = 0.0;
+    ValidationResult validation{};
+    std::vector<GpuHybridRunResult> runs;
+};
+
 double mean(const std::vector<double>& values);
 double median(std::vector<double> values);
 double sample_stddev(const std::vector<double>& values, double average);
+TimingStatistics summarize_timings(const std::vector<double>& values);
 void calculate_growth(std::vector<ExperimentResult>& results);
 void calculate_hybrid_metrics(std::vector<HybridExperimentResult>& results);
+void calculate_e5_gpu_metrics(std::vector<GpuHybridExperimentResult>& results);
 
 } // namespace heat

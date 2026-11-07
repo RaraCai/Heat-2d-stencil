@@ -3,6 +3,7 @@
 #include "stencil.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -210,6 +211,41 @@ ValidationResult validate_global(const Grid& local_grid,
               "MPI_Allreduce boundary error");
 
     return {global_pass != 0, global_min, global_max, global_boundary_error};
+}
+
+ErrorMetrics compare_global(const Grid& lhs,const Grid& rhs,
+                            const MpiDomain& domain)
+{
+    if(lhs.nx()!=rhs.nx()||lhs.ny()!=rhs.ny()||
+       lhs.global_row()!=rhs.global_row()||
+       lhs.global_col()!=rhs.global_col())
+        throw std::invalid_argument("Grid layouts differ");
+    double local_max_error=0.0;
+    double local_difference_squared=0.0;
+    double local_reference_squared=0.0;
+    for(int i=0;i<lhs.nx();++i){
+        for(int j=0;j<lhs.ny();++j){
+            const double difference=lhs.at(i,j)-rhs.at(i,j);
+            local_max_error=std::max(local_max_error,std::abs(difference));
+            local_difference_squared+=difference*difference;
+            local_reference_squared+=rhs.at(i,j)*rhs.at(i,j);
+        }
+    }
+    double global_max_error=0.0;
+    mpi_check(MPI_Allreduce(&local_max_error,&global_max_error,1,
+                            MPI_DOUBLE,MPI_MAX,domain.cart_comm),
+              "MPI_Allreduce maximum absolute error");
+
+    double global_sums[2]={};
+    const double local_sums[2]={local_difference_squared,
+                                local_reference_squared};
+    mpi_check(MPI_Allreduce(local_sums,global_sums,2,MPI_DOUBLE,MPI_SUM,
+                            domain.cart_comm),
+              "MPI_Allreduce relative L2 error");
+    const double global_relative_l2=global_sums[1]==0.0
+        ?(global_sums[0]==0.0?0.0:std::numeric_limits<double>::infinity())
+        :std::sqrt(global_sums[0]/global_sums[1]);
+    return {global_max_error,global_relative_l2};
 }
 
 void gather_global_grid(const Grid& local_grid, const MpiDomain& domain,

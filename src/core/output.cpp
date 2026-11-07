@@ -674,6 +674,339 @@ double read_e3_single_rank_baseline(const std::string& path)
 } // namespace heat
 
 namespace heat {
+namespace {
+
+void write_timing_columns(std::ostream& file, const TimingStatistics& timing)
+{
+    file << timing.median << ',' << timing.mean << ',' << timing.stddev;
+}
+
+void write_e5_gpu_header(std::ostream& file)
+{
+    file << "group,total_cpu_cores,gpu_count,node_count,mpi_ranks,ranks_per_node,"
+            "gpu_device_index,cpu_threads_per_rank,gpu_thread_limit,"
+            "process_rows,process_cols,"
+            "steps,repetitions,cpu_solver_median_s,cpu_gpu_speedup,"
+            "within_group_configuration_speedup,cross_group_gpu_scaling_speedup,"
+            "solver_median_s,solver_mean_s,solver_stddev_s,"
+            "mpi_halo_median_s,mpi_halo_mean_s,mpi_halo_stddev_s,"
+            "gpu_compute_median_s,gpu_compute_mean_s,gpu_compute_stddev_s,"
+            "boundary_d2h_median_s,boundary_d2h_mean_s,boundary_d2h_stddev_s,"
+            "halo_h2d_median_s,halo_h2d_mean_s,halo_h2d_stddev_s,"
+            "gpu_setup_median_s,gpu_setup_mean_s,gpu_setup_stddev_s,"
+            "gpu_final_copy_median_s,gpu_final_copy_mean_s,gpu_final_copy_stddev_s,"
+            "max_absolute_error,relative_l2_error,min_temperature,max_temperature,"
+            "max_boundary_error,validation_passed\n";
+}
+
+void write_e5_gpu_row(std::ostream& file,
+                      const GpuHybridExperimentResult& result)
+{
+    file << result.group << ',' << result.total_cpu_cores << ','
+         << result.gpu_count << ',' << result.node_count << ','
+         << result.mpi_ranks << ',' << result.ranks_per_node << ','
+         << result.gpu_device_index << ',' << result.cpu_threads_per_rank << ','
+         << result.gpu_thread_limit << ','
+         << result.process_rows << ',' << result.process_cols << ','
+         << result.steps << ',' << result.repetitions << ','
+         << result.cpu_solver_median << ',' << result.cpu_gpu_speedup << ','
+         << result.within_group_configuration_speedup << ','
+         << result.cross_group_gpu_scaling_speedup << ',';
+    write_timing_columns(file, result.solver_time);
+    file << ',';
+    write_timing_columns(file, result.mpi_halo_time);
+    file << ',';
+    write_timing_columns(file, result.gpu_compute_time);
+    file << ',';
+    write_timing_columns(file, result.boundary_d2h_time);
+    file << ',';
+    write_timing_columns(file, result.halo_h2d_time);
+    file << ',';
+    write_timing_columns(file, result.gpu_setup_time);
+    file << ',';
+    write_timing_columns(file, result.gpu_final_copy_time);
+    file << ',' << result.max_absolute_error << ',' << result.relative_l2_error
+         << ',' << result.validation.min_temperature << ','
+         << result.validation.max_temperature << ','
+         << result.validation.max_boundary_error << ','
+         << (result.validation.passed ? 1 : 0) << '\n';
+}
+
+TimingStatistics read_timing(const std::vector<std::string>& fields,
+                             const std::vector<std::string>& header,
+                             const std::string& prefix,
+                             const std::string& path)
+{
+    return {
+        std::stod(fields[column_index(header, prefix + "_median_s", path)]),
+        std::stod(fields[column_index(header, prefix + "_mean_s", path)]),
+        std::stod(fields[column_index(header, prefix + "_stddev_s", path)])
+    };
+}
+
+} // namespace
+
+void append_e5_gpu_csv(const GpuHybridExperimentResult& result,
+                       const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path()) {
+        std::filesystem::create_directories(destination.parent_path());
+    }
+    const bool write_header = !std::filesystem::exists(destination) ||
+                              std::filesystem::file_size(destination) == 0;
+    if (!write_header) {
+        std::ifstream existing(path);
+        std::string line;
+        if (!std::getline(existing, line) ||
+            line.find("within_group_configuration_speedup") == std::string::npos ||
+            line.find("cross_group_gpu_scaling_speedup") == std::string::npos) {
+            throw std::runtime_error("Existing E5 GPU CSV has an incompatible schema: " + path);
+        }
+        const auto header = split_csv_row(line);
+        const std::size_t group = column_index(header, "group", path);
+        const std::size_t ranks = column_index(header, "mpi_ranks", path);
+        const std::size_t threads = column_index(header, "cpu_threads_per_rank", path);
+        while (std::getline(existing, line)) {
+            const auto fields = split_csv_row(line);
+            if (fields.size() <= std::max({group, ranks, threads})) {
+                throw std::runtime_error("Malformed row in existing E5 GPU CSV: " + path);
+            }
+            if (fields[group] == result.group &&
+                fields[ranks] == std::to_string(result.mpi_ranks) &&
+                fields[threads] == std::to_string(result.cpu_threads_per_rank)) {
+                throw std::runtime_error("E5 GPU configuration already exists in CSV: " + path);
+            }
+        }
+    }
+    std::ofstream file(path, std::ios::app);
+    if (!file) {
+        throw std::runtime_error("Cannot open E5 GPU CSV: " + path);
+    }
+    file << std::setprecision(12);
+    if (write_header) write_e5_gpu_header(file);
+    write_e5_gpu_row(file, result);
+    if (!file) throw std::runtime_error("Failed while writing E5 GPU CSV: " + path);
+}
+
+void append_e5_gpu_runs_csv(const GpuHybridExperimentResult& result,
+                            const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path()) {
+        std::filesystem::create_directories(destination.parent_path());
+    }
+    const bool write_header = !std::filesystem::exists(destination) ||
+                              std::filesystem::file_size(destination) == 0;
+    std::ofstream file(path, std::ios::app);
+    if (!file) {
+        throw std::runtime_error("Cannot open E5 GPU runs CSV: " + path);
+    }
+    if (write_header) {
+        file << "group,total_cpu_cores,gpu_count,node_count,mpi_ranks,ranks_per_node,"
+                "gpu_device_index,cpu_threads_per_rank,gpu_thread_limit,"
+                "repetition,solver_time_s,"
+                "mpi_halo_time_s,gpu_compute_time_s,boundary_d2h_time_s,"
+                "halo_h2d_time_s,gpu_setup_time_s,gpu_final_copy_time_s,"
+                "max_absolute_error,relative_l2_error,validation_passed\n";
+    }
+    file << std::setprecision(12);
+    for (const auto& run : result.runs) {
+        file << result.group << ',' << result.total_cpu_cores << ','
+             << result.gpu_count << ',' << result.node_count << ','
+             << result.mpi_ranks << ',' << result.ranks_per_node << ','
+             << result.gpu_device_index << ',' << result.cpu_threads_per_rank << ','
+             << result.gpu_thread_limit << ','
+             << run.repetition << ',' << run.solver_time << ','
+             << run.mpi_halo_time << ',' << run.gpu_compute_time << ','
+             << run.boundary_d2h_time << ',' << run.halo_h2d_time << ','
+             << run.gpu_setup_time << ',' << run.gpu_final_copy_time << ','
+             << run.max_absolute_error << ',' << run.relative_l2_error << ','
+             << (run.passed ? 1 : 0) << '\n';
+    }
+    if (!file) throw std::runtime_error("Failed while writing E5 GPU runs CSV: " + path);
+}
+
+std::vector<GpuHybridExperimentResult> read_e5_gpu_csv(const std::string& path)
+{
+    std::ifstream file(path);
+    if (!file) throw std::runtime_error("Cannot open E5 GPU results CSV: " + path);
+    std::string line;
+    if (!std::getline(file, line)) {
+        throw std::runtime_error("E5 GPU results CSV is empty: " + path);
+    }
+    const auto header = split_csv_row(line);
+    const auto index = [&](const std::string& name) {
+        return column_index(header, name, path);
+    };
+    std::vector<GpuHybridExperimentResult> results;
+    while (std::getline(file, line)) {
+        const auto fields = split_csv_row(line);
+        if (fields.size() != header.size()) {
+            throw std::runtime_error("Malformed row in E5 GPU results CSV: " + path);
+        }
+        GpuHybridExperimentResult result{};
+        result.group = fields[index("group")];
+        result.total_cpu_cores = std::stoi(fields[index("total_cpu_cores")]);
+        result.gpu_count = std::stoi(fields[index("gpu_count")]);
+        result.node_count = std::stoi(fields[index("node_count")]);
+        result.mpi_ranks = std::stoi(fields[index("mpi_ranks")]);
+        result.ranks_per_node = std::stoi(fields[index("ranks_per_node")]);
+        result.gpu_device_index = std::stoi(fields[index("gpu_device_index")]);
+        result.cpu_threads_per_rank = std::stoi(fields[index("cpu_threads_per_rank")]);
+        result.gpu_thread_limit = std::stoi(fields[index("gpu_thread_limit")]);
+        result.process_rows = std::stoi(fields[index("process_rows")]);
+        result.process_cols = std::stoi(fields[index("process_cols")]);
+        result.steps = std::stoi(fields[index("steps")]);
+        result.repetitions = std::stoi(fields[index("repetitions")]);
+        result.cpu_solver_median = std::stod(fields[index("cpu_solver_median_s")]);
+        result.cpu_gpu_speedup = std::stod(fields[index("cpu_gpu_speedup")]);
+        result.within_group_configuration_speedup =
+            std::stod(fields[index("within_group_configuration_speedup")]);
+        result.cross_group_gpu_scaling_speedup =
+            std::stod(fields[index("cross_group_gpu_scaling_speedup")]);
+        result.solver_time = read_timing(fields, header, "solver", path);
+        result.mpi_halo_time = read_timing(fields, header, "mpi_halo", path);
+        result.gpu_compute_time = read_timing(fields, header, "gpu_compute", path);
+        result.boundary_d2h_time = read_timing(fields, header, "boundary_d2h", path);
+        result.halo_h2d_time = read_timing(fields, header, "halo_h2d", path);
+        result.gpu_setup_time = read_timing(fields, header, "gpu_setup", path);
+        result.gpu_final_copy_time = read_timing(fields, header, "gpu_final_copy", path);
+        result.max_absolute_error = std::stod(fields[index("max_absolute_error")]);
+        result.relative_l2_error = std::stod(fields[index("relative_l2_error")]);
+        result.validation.min_temperature = std::stod(fields[index("min_temperature")]);
+        result.validation.max_temperature = std::stod(fields[index("max_temperature")]);
+        result.validation.max_boundary_error =
+            std::stod(fields[index("max_boundary_error")]);
+        result.validation.passed = fields[index("validation_passed")] == "1";
+        results.push_back(std::move(result));
+    }
+    std::sort(results.begin(), results.end(), [](const auto& lhs, const auto& rhs) {
+        const auto lhs_config = std::find_if(
+            kE5GpuConfigurations.begin(), kE5GpuConfigurations.end(),
+            [&](const auto& config) {
+                return config.mpi_ranks == lhs.mpi_ranks &&
+                       config.cpu_threads_per_rank == lhs.cpu_threads_per_rank;
+            });
+        const auto rhs_config = std::find_if(
+            kE5GpuConfigurations.begin(), kE5GpuConfigurations.end(),
+            [&](const auto& config) {
+                return config.mpi_ranks == rhs.mpi_ranks &&
+                       config.cpu_threads_per_rank == rhs.cpu_threads_per_rank;
+            });
+        return lhs_config < rhs_config;
+    });
+    return results;
+}
+
+void print_e5_gpu_summary(
+    const std::vector<GpuHybridExperimentResult>& results)
+{
+    if (results.size() != kE5GpuConfigurations.size()) {
+        throw std::runtime_error("E5 GPU summary requires all 15 configurations.");
+    }
+    bool all_passed = true;
+    std::cout << "\n========================================================================================\n"
+              << "  E5 | MPI + OPENMP GPU HYBRID CONFIGURATION AND SCALING\n"
+              << "========================================================================================\n"
+              << "  Global Grid : " << kE5GlobalNx << " x " << kE5GlobalNy << '\n'
+              << "  Iterations  : " << kE5Steps << '\n'
+              << "  Repetitions : " << kE5Repeats << '\n'
+              << "  Solver      : Max-rank wall time incl. GPU setup, transfers and MPI\n"
+              << "  Speedups    : GPU/CPU = matching E4; In-Group = first config in group; Cross-Group = Group A at matching ranks\n\n"
+              << std::left << std::setw(7) << "Group"
+              << std::right << std::setw(7) << "Cores"
+              << std::setw(6) << "GPUs"
+              << std::setw(7) << "Nodes"
+              << std::setw(7) << "Ranks"
+              << std::setw(8) << "R/Node"
+              << std::setw(7) << "Device"
+              << std::setw(8) << "CPU T/R"
+              << std::setw(9) << "GPU Lim"
+              << std::setw(14) << "CPU Med (s)"
+              << std::setw(14) << "GPU Med (s)"
+              << std::setw(12) << "GPU/CPU E4"
+              << std::setw(14) << "In-Group"
+              << std::setw(14) << "Cross-Group"
+              << std::setw(10) << "Status" << '\n'
+              << "--------------------------------------------------------------------------------------------------\n"
+              << std::fixed << std::setprecision(4);
+    for (const auto& config : kE5GpuConfigurations) {
+        const auto found = std::find_if(
+            results.begin(), results.end(), [&](const auto& result) {
+                return result.mpi_ranks == config.mpi_ranks &&
+                       result.cpu_threads_per_rank == config.cpu_threads_per_rank &&
+                       result.group == config.group;
+            });
+        if (found == results.end()) {
+            throw std::runtime_error("E5 GPU summary is missing a configuration.");
+        }
+        const auto& result = *found;
+        if (result.gpu_count != config.gpu_count ||
+            result.node_count != config.node_count ||
+            result.ranks_per_node != config.ranks_per_node ||
+            result.gpu_device_index != config.gpu_device_index ||
+            result.cpu_threads_per_rank != config.cpu_threads_per_rank ||
+            result.gpu_thread_limit != config.thread_limit ||
+            result.steps != kE5Steps || result.repetitions != kE5Repeats ||
+            !result.validation.passed) {
+            throw std::runtime_error("E5 GPU result failed configuration or validation checks.");
+        }
+        all_passed = all_passed && result.validation.passed;
+        std::cout << std::left << std::setw(7) << result.group
+                  << std::right << std::setw(7) << result.total_cpu_cores
+                  << std::setw(6) << result.gpu_count
+                  << std::setw(7) << result.node_count
+                  << std::setw(7) << result.mpi_ranks
+                  << std::setw(8) << result.ranks_per_node
+                  << std::setw(7) << result.gpu_device_index
+                  << std::setw(8) << result.cpu_threads_per_rank
+                  << std::setw(9) << result.gpu_thread_limit
+                  << std::setw(14) << result.cpu_solver_median
+                  << std::setw(14) << result.solver_time.median
+                  << std::setw(12) << result.cpu_gpu_speedup
+                  << std::setw(14) << result.within_group_configuration_speedup;
+        if (result.cross_group_gpu_scaling_speedup > 0.0) {
+            std::cout << std::setw(14)
+                      << result.cross_group_gpu_scaling_speedup;
+        } else {
+            std::cout << std::setw(14) << "n/a";
+        }
+        std::cout
+                  << std::setw(10) << (result.validation.passed ? "PASS" : "FAIL")
+                  << '\n';
+    }
+    std::cout << "----------------------------------------------------------------------------------------\n"
+              << "  Validation : " << (all_passed ? "ALL PASSED" : "FAILED") << '\n'
+              << "  Results    : " << kE5GpuOutputCsv << '\n'
+              << "  Raw Runs   : " << kE5GpuRunsCsv << '\n'
+              << "========================================================================================\n"
+              << "\nE5 GPU timing diagnostics (median seconds; not additive across ranks):\n"
+              << std::left << std::setw(7) << "Group"
+              << std::right << std::setw(7) << "Ranks"
+              << std::setw(14) << "Solver"
+              << std::setw(14) << "MPI Halo"
+              << std::setw(14) << "GPU Compute"
+              << std::setw(14) << "Boundary D2H"
+              << std::setw(14) << "Halo H2D"
+              << std::setw(14) << "GPU Setup"
+              << std::setw(14) << "Final Copy" << '\n';
+    for (const auto& result : results) {
+        std::cout << std::left << std::setw(7) << result.group
+                  << std::right << std::setw(7) << result.mpi_ranks
+                  << std::setw(14) << result.solver_time.median
+                  << std::setw(14) << result.mpi_halo_time.median
+                  << std::setw(14) << result.gpu_compute_time.median
+                  << std::setw(14) << result.boundary_d2h_time.median
+                  << std::setw(14) << result.halo_h2d_time.median
+                  << std::setw(14) << result.gpu_setup_time.median
+                  << std::setw(14) << result.gpu_final_copy_time.median << '\n';
+    }
+}
+
+} // namespace heat
+
+namespace heat {
 void write_e2_runs_csv(const std::vector<MpiExperimentResult>& results,
                        const std::string& path)
 {

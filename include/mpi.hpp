@@ -67,6 +67,8 @@ void solve_mpi(Grid& current, Grid& next,
 // Aggregate local validation statistics across all ranks.
 ValidationResult validate_global(const Grid& local_grid,
                                  const MpiDomain& domain);
+ErrorMetrics compare_global(const Grid& lhs, const Grid& rhs,
+                            const MpiDomain& domain);
 
 // Development/debug utility: gather owned cells into a row-major global grid
 // on root. On non-root ranks, global_grid is left empty.
