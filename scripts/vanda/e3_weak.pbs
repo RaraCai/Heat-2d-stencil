@@ -23,6 +23,13 @@ module load GCC/13.3.0
 module load OpenMPI/5.0.3-GCC-13.3.0
 module load CMake/3.29.3-GCCcore-13.3.0
 
+# Ensure PBS and GCC runtime libraries are available
+export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
+
+echo
+echo "PBS TM Plugin Dependencies:"
+ldd /app1/ebapps/arches/flat-avx512/software/OpenMPI/5.0.3-GCC-13.3.0/lib/prte/prte_mca_plm_tm.so
+
 echo
 echo "Loaded Modules:"
 module list
