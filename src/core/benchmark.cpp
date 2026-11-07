@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 namespace heat {
 
@@ -51,6 +52,41 @@ void calculate_growth(std::vector<ExperimentResult>& results)
             results[i].growth = results[i].computation_time /
                                 results[i - 1].computation_time;
         }
+    }
+}
+
+
+void calculate_hybrid_metrics(std::vector<HybridExperimentResult>& results)
+{
+    for (auto& result : results) {
+        const auto config_baseline = std::find_if(
+            results.begin(), results.end(), [&](const auto& candidate) {
+                return candidate.total_cores == result.total_cores &&
+                       candidate.ranks == result.total_cores &&
+                       candidate.threads_per_rank == 1;
+            });
+        if (config_baseline == results.end() || result.solver_median <= 0.0) {
+            throw std::runtime_error("Missing MPI-only baseline for E4 configuration.");
+        }
+        result.configuration_speedup =
+            config_baseline->solver_median / result.solver_median;
+
+        auto scaling_baseline = results.end();
+        for (auto candidate = results.begin(); candidate != results.end(); ++candidate) {
+            if (candidate->threads_per_rank == result.threads_per_rank &&
+                (scaling_baseline == results.end() ||
+                 candidate->ranks < scaling_baseline->ranks)) {
+                scaling_baseline = candidate;
+            }
+        }
+        if (scaling_baseline == results.end() ||
+            scaling_baseline->solver_median <= 0.0) {
+            throw std::runtime_error("Missing fixed-thread baseline for E4 scaling.");
+        }
+        result.hybrid_speedup =
+            scaling_baseline->solver_median / result.solver_median;
+        result.parallel_efficiency = result.hybrid_speedup /
+            (static_cast<double>(result.ranks) / scaling_baseline->ranks);
     }
 }
 

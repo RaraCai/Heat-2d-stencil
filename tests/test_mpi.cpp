@@ -1,4 +1,5 @@
 #include "mpi.hpp"
+#include "stencil.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -27,6 +28,16 @@ int main(int argc, char** argv)
         }
 
         heat::exchange_halos(grid, domain);
+
+        // The OpenMP FTCS kernel must match the existing serial local kernel.
+        heat::Grid serial_next = heat::make_local_grid(domain);
+        heat::Grid openmp_next = heat::make_local_grid(domain);
+        const heat::NumericalParameters params = heat::make_parameters(8, 8, 1);
+        heat::ftcs_step(grid, serial_next, params, 8, 8);
+        heat::ftcs_step_openmp(grid, openmp_next, params, 8, 8, 2);
+        if (heat::max_absolute_error(serial_next, openmp_next) > 1e-12) {
+            local_ok = 0;
+        }
 
         // Verify each face halo against the global-coordinate encoding.
         if (domain.north != MPI_PROC_NULL) {

@@ -37,4 +37,14 @@ double read_e3_single_rank_baseline(const std::string& path);
 void write_e3_csv(const std::vector<MpiExperimentResult>& results,
                   const std::string& path);
 
+// E4 output: one summary row per configuration and one raw row per repetition.
+void append_e4_csv(const HybridExperimentResult& result,
+                   const std::string& path);
+void append_e4_runs_csv(const HybridExperimentResult& result,
+                        const std::string& path);
+std::vector<HybridExperimentResult> read_e4_csv(const std::string& path);
+void write_e4_csv(const std::vector<HybridExperimentResult>& results,
+                  const std::string& path);
+void print_hybrid_summary(const std::vector<HybridExperimentResult>& results);
+
 } // namespace heat

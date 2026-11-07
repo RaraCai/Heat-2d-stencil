@@ -35,6 +35,28 @@ inline constexpr int kE3Repeats = kE2Repeats;
 inline constexpr std::array<int, 5> kE3RankCounts = kE2RankCounts;
 inline constexpr const char* kE3OutputCsv = "results/raw/e3_weak.csv";
 
+// E4 CPU Hybrid: each configuration uses C = P * T CPU cores.
+struct HybridConfiguration {
+    int total_cores;
+    int ranks;
+    int threads_per_rank;
+    const char* group;
+};
+
+inline constexpr int kE4GlobalNx = 4096;
+inline constexpr int kE4GlobalNy = 4096;
+inline constexpr int kE4Repeats = 10;
+inline constexpr const char* kE4OutputCsv = "results/raw/e4_hybrid.csv";
+inline constexpr const char* kE4RunsCsv = "results/raw/e4_hybrid_runs.csv";
+inline constexpr std::array<HybridConfiguration, 15> kE4Configurations{{
+    {32,   2, 16, "A"}, {32,   4,  8, "A"}, {32,   8,  4, "A"},
+    {32,  16,  2, "A"}, {32,  32,  1, "A"},
+    {64,   4, 16, "B"}, {64,   8,  8, "B"}, {64,  16,  4, "B"},
+    {64,  32,  2, "B"}, {64,  64,  1, "B"},
+    {128,  8, 16, "C"}, {128, 16,  8, "C"}, {128, 32,  4, "C"},
+    {128, 64,  2, "C"}, {128,128,  1, "C"}
+}};
+
 struct NumericalParameters {
     double dx;
     double dy;

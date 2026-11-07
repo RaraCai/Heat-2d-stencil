@@ -76,9 +76,55 @@ struct MpiExperimentResult {
     ValidationResult validation;
 };
 
+// E4: one repetition and one MPI-rank/thread configuration.
+struct HybridRunResult {
+    int repetition;
+    double initialization;
+    double solver;
+    double halo;
+    double ftcs;
+    double validation;
+    double total;
+    double halo_ratio;
+    bool passed;
+};
+
+struct HybridExperimentResult {
+    int total_cores;
+    int ranks;
+    int threads_per_rank;
+    int process_rows;
+    int process_cols;
+    int steps;
+    int repetitions;
+    double initialization_median = 0.0;
+    double initialization_mean = 0.0;
+    double initialization_stddev = 0.0;
+    double solver_median = 0.0;
+    double solver_mean = 0.0;
+    double solver_stddev = 0.0;
+    double halo_median = 0.0;
+    double halo_mean = 0.0;
+    double halo_stddev = 0.0;
+    double ftcs_median = 0.0;
+    double ftcs_mean = 0.0;
+    double ftcs_stddev = 0.0;
+    double validation_median = 0.0;
+    double validation_mean = 0.0;
+    double total_median = 0.0;
+    double total_mean = 0.0;
+    double halo_ratio_median = 0.0;
+    double configuration_speedup = 0.0;
+    double hybrid_speedup = 0.0;
+    double parallel_efficiency = 0.0;
+    ValidationResult validation{};
+    std::vector<HybridRunResult> runs;
+};
+
 double mean(const std::vector<double>& values);
 double median(std::vector<double> values);
 double sample_stddev(const std::vector<double>& values, double average);
 void calculate_growth(std::vector<ExperimentResult>& results);
+void calculate_hybrid_metrics(std::vector<HybridExperimentResult>& results);
 
 } // namespace heat

@@ -694,3 +694,285 @@ void write_e2_runs_csv(const std::vector<MpiExperimentResult>& results,
                  << run.halo_ratio << ',' << (run.passed ? 1 : 0) << '\n';
 }
 } // namespace heat
+
+namespace heat {
+namespace {
+
+std::vector<std::string> split_e4_csv_row(const std::string& row)
+{
+    std::vector<std::string> fields;
+    std::istringstream input(row);
+    std::string field;
+    while (std::getline(input, field, ',')) {
+        fields.push_back(field);
+    }
+    return fields;
+}
+
+std::size_t e4_column_index(const std::vector<std::string>& header,
+                            const std::string& name,
+                            const std::string& path)
+{
+    const auto column = std::find(header.begin(), header.end(), name);
+    if (column == header.end()) {
+        throw std::runtime_error("Missing " + name + " column in E4 CSV: " + path);
+    }
+    return static_cast<std::size_t>(column - header.begin());
+}
+
+void write_e4_header(std::ostream& file)
+{
+    file << "total_cores,ranks,threads_per_rank,process_rows,process_cols,steps,repetitions,"
+            "initialization_median_s,initialization_mean_s,initialization_stddev_s,"
+            "solver_median_s,solver_mean_s,solver_stddev_s,"
+            "halo_median_s,halo_mean_s,halo_stddev_s,"
+            "ftcs_median_s,ftcs_mean_s,ftcs_stddev_s,"
+            "validation_median_s,validation_mean_s,total_median_s,total_mean_s,"
+            "halo_ratio_median,configuration_speedup,hybrid_speedup,parallel_efficiency,"
+            "min_temperature,max_temperature,max_boundary_error,validation_passed\n";
+}
+
+void write_e4_row(std::ostream& file, const HybridExperimentResult& result)
+{
+    file << result.total_cores << ',' << result.ranks << ','
+         << result.threads_per_rank << ',' << result.process_rows << ','
+         << result.process_cols << ',' << result.steps << ','
+         << result.repetitions << ','
+         << result.initialization_median << ',' << result.initialization_mean << ','
+         << result.initialization_stddev << ','
+         << result.solver_median << ',' << result.solver_mean << ','
+         << result.solver_stddev << ','
+         << result.halo_median << ',' << result.halo_mean << ','
+         << result.halo_stddev << ','
+         << result.ftcs_median << ',' << result.ftcs_mean << ','
+         << result.ftcs_stddev << ','
+         << result.validation_median << ',' << result.validation_mean << ','
+         << result.total_median << ',' << result.total_mean << ','
+         << result.halo_ratio_median << ','
+         << result.configuration_speedup << ',' << result.hybrid_speedup << ','
+         << result.parallel_efficiency << ','
+         << result.validation.min_temperature << ','
+         << result.validation.max_temperature << ','
+         << result.validation.max_boundary_error << ','
+         << (result.validation.passed ? 1 : 0) << '\n';
+}
+
+} // namespace
+
+void append_e4_csv(const HybridExperimentResult& result, const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path()) {
+        std::filesystem::create_directories(destination.parent_path());
+    }
+    const bool write_header = !std::filesystem::exists(destination) ||
+                              std::filesystem::file_size(destination) == 0;
+    if (!write_header) {
+        std::ifstream existing(path);
+        std::string header;
+        std::getline(existing, header);
+        if (header.find("configuration_speedup") == std::string::npos) {
+            throw std::runtime_error("Existing E4 CSV has an incompatible schema: " + path);
+        }
+        std::string line;
+        while (std::getline(existing, line)) {
+            const auto fields = split_e4_csv_row(line);
+            if (fields.size() >= 3 && fields[1] == std::to_string(result.ranks) &&
+                fields[2] == std::to_string(result.threads_per_rank)) {
+                throw std::runtime_error("E4 configuration already exists in CSV: " + path);
+            }
+        }
+    }
+    std::ofstream file(path, std::ios::app);
+    if (!file) {
+        throw std::runtime_error("Cannot open E4 CSV output: " + path);
+    }
+    file << std::setprecision(12);
+    if (write_header) write_e4_header(file);
+    write_e4_row(file, result);
+}
+
+void append_e4_runs_csv(const HybridExperimentResult& result, const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path()) {
+        std::filesystem::create_directories(destination.parent_path());
+    }
+    const bool write_header = !std::filesystem::exists(destination) ||
+                              std::filesystem::file_size(destination) == 0;
+    std::ofstream file(path, std::ios::app);
+    if (!file) {
+        throw std::runtime_error("Cannot open E4 runs CSV output: " + path);
+    }
+    if (write_header) {
+        file << "total_cores,ranks,threads_per_rank,repetition,initialization_s,"
+                "solver_s,halo_s,ftcs_s,validation_s,total_s,halo_ratio,validation_passed\n";
+    }
+    file << std::setprecision(12);
+    for (const auto& run : result.runs) {
+        file << result.total_cores << ',' << result.ranks << ','
+             << result.threads_per_rank << ',' << run.repetition << ','
+             << run.initialization << ',' << run.solver << ',' << run.halo << ','
+             << run.ftcs << ',' << run.validation << ',' << run.total << ','
+             << run.halo_ratio << ',' << (run.passed ? 1 : 0) << '\n';
+    }
+}
+
+std::vector<HybridExperimentResult> read_e4_csv(const std::string& path)
+{
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Cannot open E4 results CSV: " + path);
+    }
+    std::string line;
+    if (!std::getline(file, line)) {
+        throw std::runtime_error("E4 results CSV is empty: " + path);
+    }
+    const auto header = split_e4_csv_row(line);
+    const auto index = [&](const std::string& name) {
+        return e4_column_index(header, name, path);
+    };
+    const std::size_t total_cores = index("total_cores");
+    const std::size_t ranks = index("ranks");
+    const std::size_t threads = index("threads_per_rank");
+    const std::size_t rows = index("process_rows");
+    const std::size_t cols = index("process_cols");
+    const std::size_t steps = index("steps");
+    const std::size_t repetitions = index("repetitions");
+    const std::size_t init_median = index("initialization_median_s");
+    const std::size_t init_mean = index("initialization_mean_s");
+    const std::size_t init_stddev = index("initialization_stddev_s");
+    const std::size_t solver_median = index("solver_median_s");
+    const std::size_t solver_mean = index("solver_mean_s");
+    const std::size_t solver_stddev = index("solver_stddev_s");
+    const std::size_t halo_median = index("halo_median_s");
+    const std::size_t halo_mean = index("halo_mean_s");
+    const std::size_t halo_stddev = index("halo_stddev_s");
+    const std::size_t ftcs_median = index("ftcs_median_s");
+    const std::size_t ftcs_mean = index("ftcs_mean_s");
+    const std::size_t ftcs_stddev = index("ftcs_stddev_s");
+    const std::size_t validation_median = index("validation_median_s");
+    const std::size_t validation_mean = index("validation_mean_s");
+    const std::size_t total_median = index("total_median_s");
+    const std::size_t total_mean = index("total_mean_s");
+    const std::size_t halo_ratio = index("halo_ratio_median");
+    const std::size_t config_speedup = index("configuration_speedup");
+    const std::size_t hybrid_speedup = index("hybrid_speedup");
+    const std::size_t efficiency = index("parallel_efficiency");
+    const std::size_t minimum = index("min_temperature");
+    const std::size_t maximum = index("max_temperature");
+    const std::size_t boundary_error = index("max_boundary_error");
+    const std::size_t passed = index("validation_passed");
+    std::vector<HybridExperimentResult> results;
+    while (std::getline(file, line)) {
+        const auto fields = split_e4_csv_row(line);
+        if (fields.size() < header.size()) {
+            throw std::runtime_error("Malformed row in E4 results CSV: " + path);
+        }
+        HybridExperimentResult result{};
+        result.total_cores = std::stoi(fields[total_cores]);
+        result.ranks = std::stoi(fields[ranks]);
+        result.threads_per_rank = std::stoi(fields[threads]);
+        result.process_rows = std::stoi(fields[rows]);
+        result.process_cols = std::stoi(fields[cols]);
+        result.steps = std::stoi(fields[steps]);
+        result.repetitions = std::stoi(fields[repetitions]);
+        result.initialization_median = std::stod(fields[init_median]);
+        result.initialization_mean = std::stod(fields[init_mean]);
+        result.initialization_stddev = std::stod(fields[init_stddev]);
+        result.solver_median = std::stod(fields[solver_median]);
+        result.solver_mean = std::stod(fields[solver_mean]);
+        result.solver_stddev = std::stod(fields[solver_stddev]);
+        result.halo_median = std::stod(fields[halo_median]);
+        result.halo_mean = std::stod(fields[halo_mean]);
+        result.halo_stddev = std::stod(fields[halo_stddev]);
+        result.ftcs_median = std::stod(fields[ftcs_median]);
+        result.ftcs_mean = std::stod(fields[ftcs_mean]);
+        result.ftcs_stddev = std::stod(fields[ftcs_stddev]);
+        result.validation_median = std::stod(fields[validation_median]);
+        result.validation_mean = std::stod(fields[validation_mean]);
+        result.total_median = std::stod(fields[total_median]);
+        result.total_mean = std::stod(fields[total_mean]);
+        result.halo_ratio_median = std::stod(fields[halo_ratio]);
+        result.configuration_speedup = std::stod(fields[config_speedup]);
+        result.hybrid_speedup = std::stod(fields[hybrid_speedup]);
+        result.parallel_efficiency = std::stod(fields[efficiency]);
+        result.validation.min_temperature = std::stod(fields[minimum]);
+        result.validation.max_temperature = std::stod(fields[maximum]);
+        result.validation.max_boundary_error = std::stod(fields[boundary_error]);
+        result.validation.passed = fields[passed] == "1";
+        results.push_back(result);
+    }
+    std::sort(results.begin(), results.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.total_cores != rhs.total_cores) return lhs.total_cores < rhs.total_cores;
+        return lhs.ranks < rhs.ranks;
+    });
+    return results;
+}
+
+void write_e4_csv(const std::vector<HybridExperimentResult>& results,
+                  const std::string& path)
+{
+    const std::filesystem::path destination(path);
+    if (destination.has_parent_path()) {
+        std::filesystem::create_directories(destination.parent_path());
+    }
+    std::ofstream file(path, std::ios::trunc);
+    if (!file) {
+        throw std::runtime_error("Cannot rewrite E4 CSV: " + path);
+    }
+    file << std::setprecision(12);
+    write_e4_header(file);
+    for (const auto& result : results) write_e4_row(file, result);
+}
+
+void print_hybrid_summary(const std::vector<HybridExperimentResult>& results)
+{
+    if (results.size() != kE4Configurations.size()) {
+        throw std::runtime_error("E4 summary requires all 15 configurations.");
+    }
+    std::cout << "\n==========================================================================\n"
+              << "  E4 | MPI + OPENMP HYBRID CONFIGURATION AND STRONG SCALING\n"
+              << "==========================================================================\n"
+              << "  Global Grid : " << kE4GlobalNx << " x " << kE4GlobalNy << '\n'
+              << "  Iterations  : " << kSteps << '\n'
+              << "  Repetitions : " << kE4Repeats << '\n'
+              << "  Runtime     : Median of max-rank elapsed time (seconds)\n\n"
+              << std::left << std::setw(7) << "Group"
+              << std::right << std::setw(8) << "Cores"
+              << std::setw(8) << "Ranks"
+              << std::setw(9) << "Threads"
+              << std::setw(16) << "Solver Med (s)"
+              << std::setw(15) << "Config Speedup"
+              << std::setw(15) << "Hybrid Speedup"
+              << std::setw(13) << "Efficiency"
+              << std::setw(10) << "Status" << '\n'
+              << "--------------------------------------------------------------------------\n"
+              << std::fixed << std::setprecision(4);
+    for (const auto& result : results) {
+        const char* group = result.total_cores == 32 ? "A" :
+                            result.total_cores == 64 ? "B" : "C";
+        std::ostringstream efficiency;
+        efficiency << std::setprecision(2) << result.parallel_efficiency * 100.0 << '%';
+        std::cout << std::left << std::setw(7) << group
+                  << std::right << std::setw(8) << result.total_cores
+                  << std::setw(8) << result.ranks
+                  << std::setw(9) << result.threads_per_rank
+                  << std::setw(16) << result.solver_median
+                  << std::setw(15) << result.configuration_speedup
+                  << std::setw(15) << result.hybrid_speedup
+                  << std::setw(13) << efficiency.str()
+                  << std::setw(10) << (result.validation.passed ? "PASS" : "FAIL")
+                  << '\n';
+    }
+    std::cout << "--------------------------------------------------------------------------\n"
+              << "  Validation : "
+              << (std::all_of(results.begin(), results.end(), [](const auto& r) {
+                      return r.validation.passed;
+                  }) ? "ALL PASSED" : "FAILED") << '\n'
+              << "  Results    : " << kE4OutputCsv << '\n'
+              << "  Raw Runs   : " << kE4RunsCsv << '\n'
+              << "==========================================================================\n";
+}
+
+} // namespace heat

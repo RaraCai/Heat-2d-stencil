@@ -77,4 +77,31 @@ namespace heat {
             current.swap_data(next);
         }
     }
+
+    // OpenMP implementation of the same owned-cell FTCS update.
+    // MPI communication is intentionally kept outside the parallel region.
+    void ftcs_step_openmp(const Grid& current,Grid& next,
+                          const NumericalParameters& params,int global_nx,
+                          int global_ny,int num_threads){
+        if(num_threads<1)
+            throw std::invalid_argument("OpenMP thread count must be positive");
+        if(current.nx()!=next.nx()||current.ny()!=next.ny()||
+        current.halo()!=next.halo()||current.global_row()!=next.global_row()||
+        current.global_col()!=next.global_col())
+            throw std::invalid_argument("Grid layouts do not match");
+        const int row_begin=current.global_row()==0?1:0;
+        const int row_end=current.global_row()+current.nx()==global_nx
+            ?current.nx()-1:current.nx();
+        const int col_begin=current.global_col()==0?1:0;
+        const int col_end=current.global_col()+current.ny()==global_ny
+            ?current.ny()-1:current.ny();
+        #pragma omp parallel for collapse(2) schedule(static) num_threads(num_threads)
+        for(int i=row_begin;i<row_end;++i){
+            for(int j=col_begin;j<col_end;++j){
+                const double c=current.at(i,j);
+                next.at(i,j)=c+params.rx*(current.at(i-1,j)-2*c+current.at(i+1,j))
+                            +params.ry*(current.at(i,j-1)-2*c+current.at(i,j+1));
+            }
+        }
+    }
 }
