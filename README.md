@@ -37,7 +37,7 @@ On Vanda, submit the full E3 job with `qsub scripts/vanda/e3_weak.pbs`.
 
 The E4 CPU experiment is unchanged and is submitted with
 `qsub scripts/vanda/e4_hybrid_CPU.pbs`. E5 uses a Login Node build script and a
-single PBS job for GPU correctness tests and measurements. From a fresh clone:
+single PBS job for its five Group A GPU configurations. From a fresh clone:
 
 ```bash
 git clone https://github.com/5555555559/Heat-2d-stencil.git
@@ -49,7 +49,7 @@ qsub scripts/vanda/e4_hybrid_CPU.pbs
 # Once E4 has produced its full baseline, build E5 and run CPU/MPI CTest.
 ./scripts/local/build_e5.sh
 
-# Submit the single-GPU correctness preflight and E5 Group A configurations.
+# Submit the five E5 Group A configurations on one GPU.
 qsub scripts/vanda/e5_hybrid_GPU.pbs
 ```
 
@@ -60,10 +60,10 @@ E4 CSV contains all 15 configurations; and builds into `build/vanda_gpu/` with
 NVHPC `-mp=gpu -gpu=cc86`. It runs CPU/MPI CTest on the Login Node. No manual
 GPU environment setup is required.
 
-The PBS job does not compile. It rechecks the E4 baseline and built executables,
-then runs the separate GPU correctness preflight in its GPU allocation before
-starting measurements. Check the PBS job status with `qstat -u "$USER"` and
-read its combined output log for the GPU tests and final summary.
+The PBS job does not compile. It rechecks the E4 baseline and E5 executable,
+then runs the five production configurations. Check the PBS job status with
+`qstat -u "$USER"` and read its combined output log for progress and the final
+summary.
 
 The job requests one node, 36 CPU cores and one GPU. E5 runs only the five
 Group A MPI-rank and CPU threads-per-rank configurations from E4 (2, 4, 8, 16,
@@ -84,9 +84,7 @@ as a total runtime. Boundary D2H includes device edge packing and host staging;
 halo H2D includes host staging and device halo unpacking. The solver wall time
 also includes releasing its resident device buffers.
 
-Before measuring, PBS runs GPU/CPU full-grid comparison tests for odd and even
-step counts with one rank and with four ranks sharing the single GPU. Each
-production configuration also compares one complete 4096 x 4096, 500-step GPU
+Each production configuration compares one complete 4096 x 4096, 500-step GPU
 result with a CPU OpenMP
 reference using the same MPI decomposition; that correctness run is outside
 the recorded GPU solver time. The comparison reports maximum absolute and

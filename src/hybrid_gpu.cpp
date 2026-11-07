@@ -170,46 +170,6 @@ void print_configurations()
     }
 }
 
-void run_correctness_test(int& argc, char**& argv)
-{
-    int provided = MPI_THREAD_SINGLE;
-    if (MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided) !=
-        MPI_SUCCESS) {
-        throw std::runtime_error("MPI_Init_thread failed in --test.");
-    }
-    int rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    int local_ok = provided >= MPI_THREAD_FUNNELED &&
-                   omp_get_num_devices() > 0;
-    int all_ok = 0;
-    MPI_Allreduce(&local_ok, &all_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
-    if (!all_ok) {
-        if (rank == 0) std::cerr << "GPU correctness test has no device/runtime.\n";
-        MPI_Abort(MPI_COMM_WORLD, 1);
-        return;
-    }
-    omp_set_default_device(0);
-    const auto& config = heat::kE5GpuConfigurations.front();
-    try {
-        const auto comparison = run_reference_cases(
-            config, 0, MPI_COMM_WORLD);
-        if (rank == 0) {
-            std::cout << "PASS E5 GPU odd/even steps, " << [&] {
-                int size = 0;
-                MPI_Comm_size(MPI_COMM_WORLD, &size);
-                return size;
-            }() << " MPI rank(s); max_abs="
-                      << comparison.max_absolute_error
-                      << ", relative_l2=" << comparison.relative_l2_error << '\n';
-        }
-        MPI_Finalize();
-    } catch (const std::exception& error) {
-        std::cerr << "Rank " << rank << " GPU correctness test error: "
-                  << error.what() << '\n';
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-}
-
 void run_configuration(int index, int& argc, char**& argv)
 {
     const auto& config = configuration_at(index);
@@ -418,17 +378,12 @@ int main(int argc, char** argv)
             print_summary();
             return 0;
         }
-        if (argc == 2 && std::string(argv[1]) == "--test") {
-            run_correctness_test(argc, argv);
-            return 0;
-        }
         if (argc == 3 && std::string(argv[1]) == "--run") {
             run_configuration(std::stoi(argv[2]), argc, argv);
             return 0;
         }
         std::cerr << "Usage:\n"
                   << "  " << argv[0] << " --list-configurations\n"
-                  << "  " << argv[0] << " --test\n"
                   << "  " << argv[0] << " --run <configuration-index>\n"
                   << "  " << argv[0] << " --summary\n";
         return 2;

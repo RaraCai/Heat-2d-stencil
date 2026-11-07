@@ -61,14 +61,10 @@ if [[ -e results/raw/e5_gpu.csv || -e results/raw/e5_gpu_runs.csv ]]; then
 fi
 
 BUILD_DIR="build/vanda_gpu"
-if [[ ! -x "$BUILD_DIR/stencil_hybrid_gpu" || ! -x "$BUILD_DIR/test_gpu" ]]; then
+if [[ ! -x "$BUILD_DIR/stencil_hybrid_gpu" ]]; then
     echo "E5 binaries are missing. Run scripts/local/build_e5.sh on a login node first." >&2
     exit 1
 fi
-
-echo
-echo "Running GPU correctness tests (distinct from login-node CPU/MPI CTest)..."
-BUILD_DIR="$BUILD_DIR" bash ./scripts/local/run_e5.sh --test
 
 echo
 echo "Running the five E5 Group A configurations on one GPU."

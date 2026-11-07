@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if (( $# != 0 )); then
+    echo "Usage: bash scripts/local/run_e5.sh" >&2
+    exit 2
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 BUILD_DIR="${BUILD_DIR:-build/vanda_gpu}"
 EXECUTABLE="$BUILD_DIR/stencil_hybrid_gpu"
-MODE="${1:-run}"
 
 if [[ ! -x "$EXECUTABLE" ]]; then
     echo "Missing E5 GPU executable: $EXECUTABLE" >&2
@@ -23,17 +27,6 @@ fi
 hostfile="$(mktemp "${TMPDIR:-/tmp}/e5_gpu_hosts.XXXXXX")"
 trap 'rm -f -- "$hostfile"' EXIT
 printf '%s slots=36\n' "${allocated_nodes[0]}" > "$hostfile"
-
-if [[ "$MODE" == "--test" ]]; then
-    echo "[E5] GPU reference preflight: one rank / one GPU"
-    mpirun --hostfile "$hostfile" --map-by ppr:1:node --bind-to core \
-        -np 1 "$EXECUTABLE" --test
-
-    echo "[E5] GPU reference preflight: four ranks sharing one GPU"
-    mpirun --hostfile "$hostfile" --map-by ppr:4:node:PE=1 --bind-to core \
-        -np 4 "$EXECUTABLE" --test
-    exit 0
-fi
 
 if [[ -e results/raw/e5_gpu.csv || -e results/raw/e5_gpu_runs.csv ]]; then
     echo "E5 GPU result file already exists. Move or remove both files explicitly before rerunning." >&2

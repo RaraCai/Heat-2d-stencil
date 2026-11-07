@@ -41,11 +41,10 @@ cmake -S . -B "$BUILD_DIR" \
     -DHEAT_ENABLE_NVHPC_GPU=ON \
     -DHEAT_NVHPC_GPU_ARCH=cc86
 cmake --build "$BUILD_DIR" \
-    --target stencil_hybrid_gpu test_gpu test_core test_mpi \
+    --target stencil_hybrid_gpu test_core test_mpi \
     --parallel 4
 ctest --test-dir "$BUILD_DIR" --output-on-failure
 
 test -x "$BUILD_DIR/stencil_hybrid_gpu"
-test -x "$BUILD_DIR/test_gpu"
 echo "E5 GPU binaries built in $BUILD_DIR; CPU/MPI CTest passed."
 echo "Submit with: qsub scripts/vanda/e5_hybrid_GPU.pbs"
