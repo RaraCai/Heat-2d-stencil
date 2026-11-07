@@ -9,6 +9,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
+option(HEAT_OPENMP_OFFLOAD "Compile OpenMP target regions for NVIDIA GPUs with GCC" OFF)
+if(HEAT_OPENMP_OFFLOAD)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message(FATAL_ERROR "HEAT_OPENMP_OFFLOAD currently requires GCC with nvptx offload support")
+    endif()
+    add_compile_options(-foffload=nvptx-none)
+    add_link_options(-foffload=nvptx-none)
+endif()
+
 add_library(heat_core STATIC
     src/core/grid.cpp
     src/core/stencil.cpp
@@ -40,6 +49,10 @@ target_compile_options(stencil_weak_mpi PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(stencil_hybrid src/hybrid.cpp)
 target_link_libraries(stencil_hybrid PRIVATE heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
 target_compile_options(stencil_hybrid PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(stencil_hybrid_gpu src/hybrid_gpu.cpp)
+target_link_libraries(stencil_hybrid_gpu PRIVATE heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
+target_compile_options(stencil_hybrid_gpu PRIVATE -Wall -Wextra -Wpedantic)
 
 include(CTest)
 if(BUILD_TESTING)

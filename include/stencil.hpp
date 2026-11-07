@@ -13,6 +13,10 @@ void ftcs_step(const Grid& current,Grid& next,
 void ftcs_step_openmp(const Grid& current,Grid& next,
                       const NumericalParameters& params,int global_nx,
                       int global_ny,int num_threads);
+// OpenMP target version; the MPI halo exchange remains on the host.
+void ftcs_step_openmp_target(const Grid& current,Grid& next,
+                             const NumericalParameters& params,int global_nx,
+                             int global_ny);
 // Caller manages communication and parallelization between steps.
 void solve_serial(Grid& current,Grid& next,const NumericalParameters& params,
                   int global_nx,int global_ny,int steps);

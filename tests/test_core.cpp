@@ -180,6 +180,29 @@ int main(){
     auto p=heat::make_parameters(64,64,2);
     heat::Grid a(64,64),b(64,64);
     heat::initialize(a,64,64); b.data()=a.data();
+    heat::Grid target_current(64,64),target_next(64,64);
+    heat::initialize(target_current,64,64);
+    target_next.data()=target_current.data();
+    heat::ftcs_step(a,b,p,64,64);
+    heat::ftcs_step_openmp_target(target_current,target_next,p,64,64);
+    for(std::size_t i=0;i<b.data().size();++i){
+        if(std::abs(b.data()[i]-target_next.data()[i])>1e-12)return 1;
+    }
+    heat::Grid halo_reference(4,5,1,1,1),halo_target(4,5,1,1,1);
+    for(int i=-1;i<=halo_reference.nx();++i){
+        for(int j=-1;j<=halo_reference.ny();++j){
+            halo_reference.at(i,j)=30.0+i*2.0+j;
+        }
+    }
+    halo_target.data()=halo_reference.data();
+    heat::Grid halo_expected(4,5,1,1,1);
+    halo_expected.data()=halo_reference.data();
+    const auto halo_params=heat::make_parameters(10,10,2);
+    heat::ftcs_step(halo_reference,halo_expected,halo_params,10,10);
+    heat::ftcs_step_openmp_target(halo_target,halo_reference,halo_params,10,10);
+    for(std::size_t i=0;i<halo_reference.data().size();++i){
+        if(std::abs(halo_expected.data()[i]-halo_reference.data()[i])>1e-12)return 1;
+    }
     heat::solve_serial(a,b,p,64,64,2);
     auto v=heat::validate_local(a,64,64);
     if(!v.passed || std::abs(p.rx-0.125)>1e-12)return 1;

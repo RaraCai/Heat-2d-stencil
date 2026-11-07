@@ -48,6 +48,8 @@ inline constexpr int kE4GlobalNy = 4096;
 inline constexpr int kE4Repeats = 10;
 inline constexpr const char* kE4OutputCsv = "results/raw/e4_hybrid.csv";
 inline constexpr const char* kE4RunsCsv = "results/raw/e4_hybrid_runs.csv";
+inline constexpr const char* kE4GpuOutputCsv = "results/raw/e4_gpu.csv";
+inline constexpr const char* kE4GpuRunsCsv = "results/raw/e4_gpu_runs.csv";
 inline constexpr std::array<HybridConfiguration, 15> kE4Configurations{{
     {32,   2, 16, "A"}, {32,   4,  8, "A"}, {32,   8,  4, "A"},
     {32,  16,  2, "A"}, {32,  32,  1, "A"},

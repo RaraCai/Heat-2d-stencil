@@ -1,5 +1,6 @@
 #include "stencil.hpp"
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
 namespace heat {
     NumericalParameters make_parameters(int nx,int ny,int steps){
@@ -101,6 +102,42 @@ namespace heat {
                 const double c=current.at(i,j);
                 next.at(i,j)=c+params.rx*(current.at(i-1,j)-2*c+current.at(i+1,j))
                             +params.ry*(current.at(i,j-1)-2*c+current.at(i,j+1));
+            }
+        }
+    }
+
+    void ftcs_step_openmp_target(const Grid& current,Grid& next,
+                                 const NumericalParameters& params,int global_nx,
+                                 int global_ny){
+        if(current.nx()!=next.nx()||current.ny()!=next.ny()||
+        current.halo()!=next.halo()||current.global_row()!=next.global_row()||
+        current.global_col()!=next.global_col()||
+        current.data().size()!=next.data().size())
+            throw std::invalid_argument("Grid layouts do not match");
+        const int row_begin=current.global_row()==0?1:0;
+        const int row_end=current.global_row()+current.nx()==global_nx
+            ?current.nx()-1:current.nx();
+        const int col_begin=current.global_col()==0?1:0;
+        const int col_end=current.global_col()+current.ny()==global_ny
+            ?current.ny()-1:current.ny();
+        const std::size_t data_size=current.data().size();
+        const int stride=current.stride();
+        const int halo=current.halo();
+        const double* current_data=current.data().data();
+        double* next_data=next.data().data();
+        const double rx=params.rx;
+        const double ry=params.ry;
+        #pragma omp target teams distribute parallel for collapse(2) \
+            map(to: current_data[0:data_size]) \
+            map(tofrom: next_data[0:data_size])
+        for(int i=row_begin;i<row_end;++i){
+            for(int j=col_begin;j<col_end;++j){
+                const std::size_t center=
+                    static_cast<std::size_t>(i+halo)*stride+j+halo;
+                const double c=current_data[center];
+                next_data[center]=c+rx*(current_data[center-stride]-2*c+
+                    current_data[center+stride])+ry*(current_data[center-1]-2*c+
+                    current_data[center+1]);
             }
         }
     }
