@@ -10,8 +10,8 @@ struct GpuSolverTiming {
     double solver_time = 0.0;
     double mpi_halo_time = 0.0;
     double gpu_compute_time = 0.0;
-    double boundary_d2h_time = 0.0;
-    double halo_h2d_time = 0.0;
+    double gpu_pack_time = 0.0;
+    double gpu_unpack_time = 0.0;
     double gpu_setup_time = 0.0;
     double gpu_final_copy_time = 0.0;
 };
@@ -22,8 +22,9 @@ struct ReferenceComparison {
     bool passed = false;
 };
 
-// Solves on the GPU with resident double buffers. MPI halo exchange remains
-// on the host; only owned boundaries and received halos are transferred per step.
+// E5: resident grid buffers and direct MPI communication using
+// OpenMP-allocated GPU send/receive buffers. MPI halo exchange remains
+// blocking; no explicit per-step host staging copies are performed.
 void solve_mpi_gpu(Grid& current, const Grid& next,
                    const NumericalParameters& params,
                    const MpiDomain& domain, int steps, int device,

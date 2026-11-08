@@ -1,12 +1,10 @@
 #include "gpu_solver.hpp"
 
-#include <algorithm>
 #include <cstddef>
-#include <cstdio>
+#include <climits>
 #include <omp.h>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace heat {
 
@@ -25,29 +23,17 @@ void launch_unpack_halos(double* grid, const double* packed,
 
 namespace {
 
-void log_gpu_stage(const MpiDomain& domain, int step, int steps,
-                   const char* stage, bool all_ranks)
-{
-    if (!all_ranks && domain.rank != 0) return;
-    std::fprintf(stderr, "[E5][t=%.3fs][rank %d/%d][step %d/%d] %s\n",
-                 MPI_Wtime(), domain.rank, domain.size, step, steps, stage);
-    std::fflush(stderr);
-}
-
 class DeviceBuffer {
 public:
     DeviceBuffer(std::size_t bytes, int device)
         : pointer_(omp_target_alloc(bytes, device)), device_(device)
     {
         if (pointer_ == nullptr) {
-            throw std::runtime_error("omp_target_alloc failed for GPU grid buffer.");
+            throw std::runtime_error("omp_target_alloc failed for E5 GPU buffer.");
         }
     }
 
-    ~DeviceBuffer()
-    {
-        release();
-    }
+    ~DeviceBuffer() { release(); }
 
     DeviceBuffer(const DeviceBuffer&) = delete;
     DeviceBuffer& operator=(const DeviceBuffer&) = delete;
@@ -63,31 +49,40 @@ public:
     }
 
 private:
-    void* pointer_;
-    int device_;
+    void* pointer_ = nullptr;
+    int device_ = omp_get_initial_device();
 };
 
+void mpi_check(int status, const char* operation)
+{
+    if (status == MPI_SUCCESS) return;
+
+    char message[MPI_MAX_ERROR_STRING]{};
+    int length = 0;
+    MPI_Error_string(status, message, &length);
+    throw std::runtime_error(std::string(operation) + ": " +
+                             std::string(message, static_cast<std::size_t>(length)));
+}
+
 void copy_to_device(double* device_base, const double* host_base,
-                    std::size_t count, std::size_t device_offset,
-                    int device)
+                    std::size_t count, int device)
 {
     const int status = omp_target_memcpy(
-        device_base, host_base, count * sizeof(double),
-        device_offset * sizeof(double), 0, device, omp_get_initial_device());
+        device_base, host_base, count * sizeof(double), 0, 0,
+        device, omp_get_initial_device());
     if (status != 0) {
-        throw std::runtime_error("Host-to-device copy failed.");
+        throw std::runtime_error("E5 initial host-to-device copy failed.");
     }
 }
 
 void copy_from_device(double* host_base, const double* device_base,
-                      std::size_t count, std::size_t device_offset,
-                      int device)
+                      std::size_t count, int device)
 {
     const int status = omp_target_memcpy(
-        host_base, device_base, count * sizeof(double), 0,
-        device_offset * sizeof(double), omp_get_initial_device(), device);
+        host_base, device_base, count * sizeof(double), 0, 0,
+        omp_get_initial_device(), device);
     if (status != 0) {
-        throw std::runtime_error("Device-to-host copy failed.");
+        throw std::runtime_error("E5 final device-to-host copy failed.");
     }
 }
 
@@ -103,7 +98,53 @@ void validate_layout(const Grid& current, const Grid& next,
         next.global_row() != current.global_row() ||
         next.global_col() != current.global_col() ||
         current.data().size() != next.data().size()) {
-        throw std::invalid_argument("GPU solver grids do not match the MPI domain.");
+        throw std::invalid_argument("E5 GPU solver grids do not match the MPI domain.");
+    }
+}
+
+void exchange_device_halos(const double* send_buffer, double* receive_buffer,
+                           int nx, int ny, const MpiDomain& domain,
+                           double* elapsed_seconds)
+{
+    const std::size_t north_offset = 0;
+    const std::size_t south_offset = static_cast<std::size_t>(ny);
+    const std::size_t west_offset = static_cast<std::size_t>(2) * ny;
+    const std::size_t east_offset = west_offset + static_cast<std::size_t>(nx);
+
+    const double start = MPI_Wtime();
+
+    // Tag 100: send this rank's north owned edge; receive the south
+    // neighbor's north edge into this rank's south halo segment.
+    mpi_check(MPI_Sendrecv(
+        send_buffer + north_offset, ny, MPI_DOUBLE, domain.north, 100,
+        receive_buffer + south_offset, ny, MPI_DOUBLE, domain.south, 100,
+        domain.cart_comm, MPI_STATUS_IGNORE),
+        "MPI_Sendrecv direct-device north/south");
+
+    // Tag 101: send the south owned edge; receive the north neighbor's
+    // south edge into this rank's north halo segment.
+    mpi_check(MPI_Sendrecv(
+        send_buffer + south_offset, ny, MPI_DOUBLE, domain.south, 101,
+        receive_buffer + north_offset, ny, MPI_DOUBLE, domain.north, 101,
+        domain.cart_comm, MPI_STATUS_IGNORE),
+        "MPI_Sendrecv direct-device south/north");
+
+    // The west/east columns were packed contiguously, so MPI_DOUBLE is
+    // correct here; the host-grid column_type is not used for device buffers.
+    mpi_check(MPI_Sendrecv(
+        send_buffer + west_offset, nx, MPI_DOUBLE, domain.west, 102,
+        receive_buffer + east_offset, nx, MPI_DOUBLE, domain.east, 102,
+        domain.cart_comm, MPI_STATUS_IGNORE),
+        "MPI_Sendrecv direct-device west/east");
+
+    mpi_check(MPI_Sendrecv(
+        send_buffer + east_offset, nx, MPI_DOUBLE, domain.east, 103,
+        receive_buffer + west_offset, nx, MPI_DOUBLE, domain.west, 103,
+        domain.cart_comm, MPI_STATUS_IGNORE),
+        "MPI_Sendrecv direct-device east/west");
+
+    if (elapsed_seconds != nullptr) {
+        *elapsed_seconds += MPI_Wtime() - start;
     }
 }
 
@@ -115,160 +156,104 @@ void solve_mpi_gpu(Grid& current, const Grid& next,
                    int thread_limit, GpuSolverTiming* timing)
 {
     validate_layout(current, next, domain);
-    const int initial_device = omp_get_initial_device();
-    const bool is_gpu_device =
-        device >= 0 && device < omp_get_num_devices();
-    if (steps < 0 || (device != initial_device && !is_gpu_device) ||
-        thread_limit < 1) {
-        throw std::invalid_argument("Invalid GPU solver steps, device, or thread limit.");
+
+    const bool is_gpu_device = device >= 0 && device < omp_get_num_devices();
+    if (steps < 0 || !is_gpu_device || thread_limit < 1) {
+        throw std::invalid_argument(
+            "E5 requires a valid GPU device, nonnegative steps, and positive thread_limit.");
     }
-    if (is_gpu_device && omp_get_default_device() != device) {
+    if (omp_get_default_device() != device) {
         omp_set_default_device(device);
     }
 
     GpuSolverTiming measured{};
     const double solver_start = MPI_Wtime();
     const double setup_start = MPI_Wtime();
+
     const std::size_t element_count = current.data().size();
-    const std::size_t bytes = element_count * sizeof(double);
-    log_gpu_stage(domain, 0, steps, "GPU buffer allocation begin", true);
-    DeviceBuffer first(bytes, device);
-    DeviceBuffer second(bytes, device);
+    const std::size_t grid_bytes = element_count * sizeof(double);
+    const int nx = current.nx();
+    const int ny = current.ny();
     const std::size_t edge_count =
-        static_cast<std::size_t>(2 * current.nx() + 2 * current.ny());
-    DeviceBuffer edge_buffer(edge_count * sizeof(double), device);
-    std::vector<double> host_edges(edge_count);
-    log_gpu_stage(domain, 0, steps, "GPU buffers allocated; initial copies begin", true);
-    copy_to_device(first.data(), current.data().data(), element_count, 0, device);
-    copy_to_device(second.data(), next.data().data(), element_count, 0, device);
-    log_gpu_stage(domain, 0, steps, "initial host-to-device copies complete", true);
+        static_cast<std::size_t>(2) * static_cast<std::size_t>(ny) +
+        static_cast<std::size_t>(2) * static_cast<std::size_t>(nx);
+    if (ny <= 0 || nx <= 0 || edge_count > static_cast<std::size_t>(INT_MAX)) {
+        throw std::invalid_argument("E5 local grid dimensions are invalid.");
+    }
+
+    DeviceBuffer first(grid_bytes, device);
+    DeviceBuffer second(grid_bytes, device);
+    DeviceBuffer send_buffer(edge_count * sizeof(double), device);
+    DeviceBuffer receive_buffer(edge_count * sizeof(double), device);
+
+    copy_to_device(first.data(), current.data().data(), element_count, device);
+    copy_to_device(second.data(), next.data().data(), element_count, device);
     measured.gpu_setup_time = MPI_Wtime() - setup_start;
 
     double* device_current = first.data();
     double* device_next = second.data();
+
     const int stride = current.stride();
     const int halo = current.halo();
     const int row_begin = domain.global_row == 0 ? 1 : 0;
-    const int row_end = domain.global_row + current.nx() == domain.global_nx
-        ? current.nx() - 1 : current.nx();
+    const int row_end = domain.global_row + nx == domain.global_nx
+        ? nx - 1 : nx;
     const int col_begin = domain.global_col == 0 ? 1 : 0;
-    const int col_end = domain.global_col + current.ny() == domain.global_ny
-        ? current.ny() - 1 : current.ny();
+    const int col_end = domain.global_col + ny == domain.global_ny
+        ? ny - 1 : ny;
+
+    const int has_north = domain.north != MPI_PROC_NULL;
+    const int has_south = domain.south != MPI_PROC_NULL;
+    const int has_west = domain.west != MPI_PROC_NULL;
+    const int has_east = domain.east != MPI_PROC_NULL;
 
     for (int step = 0; step < steps; ++step) {
-        const bool trace_step = step == 0 || step + 1 == steps ||
-                                (step + 1) % 100 == 0;
-        const bool trace_all_ranks = step == 0;
-        const bool trace_collective = trace_all_ranks ||
-                                      (step + 1) % 100 == 0;
-        const auto log_step = [&](const char* stage) {
-            if (trace_step) {
-                log_gpu_stage(domain, step + 1, steps, stage, trace_all_ranks);
-            }
-        };
-        log_step("owned-edge pack kernel begin");
-        const double boundary_start = MPI_Wtime();
-        launch_pack_owned_edges(device_current, edge_buffer.data(),
-            current.nx(), current.ny(), stride, halo, thread_limit);
-        log_step("owned-edge pack kernel complete; D2H copy begin");
-        const int edge_copy_status = omp_target_memcpy(
-            host_edges.data(), edge_buffer.data(), edge_count * sizeof(double),
-            0, 0, omp_get_initial_device(), device);
-        if (edge_copy_status != 0) {
-            throw std::runtime_error("Owned-edge device-to-host copy failed.");
-        }
-        log_step("owned-edge D2H copy complete");
-        std::size_t edge_offset = 0;
-        if (domain.north != MPI_PROC_NULL) {
-            std::copy_n(host_edges.data() + edge_offset, current.ny(),
-                        &current.at(0, 0));
-        }
-        edge_offset += static_cast<std::size_t>(current.ny());
-        if (domain.south != MPI_PROC_NULL) {
-            std::copy_n(host_edges.data() + edge_offset, current.ny(),
-                        &current.at(current.nx() - 1, 0));
-        }
-        edge_offset += static_cast<std::size_t>(current.ny());
-        for (int i = 0; i < current.nx(); ++i) {
-            if (domain.west != MPI_PROC_NULL) {
-                current.at(i, 0) = host_edges[edge_offset +
-                    static_cast<std::size_t>(i)];
-            }
-            if (domain.east != MPI_PROC_NULL) {
-                current.at(i, current.ny() - 1) =
-                    host_edges[edge_offset + current.nx() +
-                               static_cast<std::size_t>(i)];
-            }
-        }
-        measured.boundary_d2h_time += MPI_Wtime() - boundary_start;
+        // OpenMP target regions are synchronous here. Returning from the
+        // pack launch guarantees the send buffer is ready for MPI.
+        const double pack_start = MPI_Wtime();
+        launch_pack_owned_edges(device_current, send_buffer.data(),
+                                nx, ny, stride, halo, thread_limit);
+        measured.gpu_pack_time += MPI_Wtime() - pack_start;
 
-        log_gpu_stage(domain, step + 1, steps,
-                      "MPI halo exchange begin", trace_collective);
-        exchange_halos(current, domain, &measured.mpi_halo_time);
-        log_gpu_stage(domain, step + 1, steps,
-                      "MPI halo exchange complete; halo H2D copy begin",
-                      trace_collective);
+        // OpenMPI CUDA-aware support was verified separately with
+        // omp_target_alloc pointers. No application-side D2H/H2D staging
+        // is performed in this halo path.
+        exchange_device_halos(send_buffer.data(), receive_buffer.data(),
+                              nx, ny, domain, &measured.mpi_halo_time);
 
-        const double halo_start = MPI_Wtime();
-        edge_offset = 0;
-        if (domain.north != MPI_PROC_NULL) {
-            std::copy_n(&current.at(-1, 0), current.ny(),
-                        host_edges.data() + edge_offset);
-        }
-        edge_offset += static_cast<std::size_t>(current.ny());
-        if (domain.south != MPI_PROC_NULL) {
-            std::copy_n(&current.at(current.nx(), 0), current.ny(),
-                        host_edges.data() + edge_offset);
-        }
-        edge_offset += static_cast<std::size_t>(current.ny());
-        for (int i = 0; i < current.nx(); ++i) {
-            if (domain.west != MPI_PROC_NULL) {
-                host_edges[edge_offset + static_cast<std::size_t>(i)] =
-                    current.at(i, -1);
-            }
-            if (domain.east != MPI_PROC_NULL) {
-                host_edges[edge_offset + current.nx() +
-                           static_cast<std::size_t>(i)] =
-                    current.at(i, current.ny());
-            }
-        }
-        const int halo_copy_status = omp_target_memcpy(
-            edge_buffer.data(), host_edges.data(), edge_count * sizeof(double),
-            0, 0, device, omp_get_initial_device());
-        if (halo_copy_status != 0) {
-            throw std::runtime_error("MPI-halo host-to-device copy failed.");
-        }
-        log_step("halo H2D copy complete; unpack kernel begin");
-        launch_unpack_halos(device_current, edge_buffer.data(),
-            current.nx(), current.ny(), stride, halo,
-            domain.north != MPI_PROC_NULL,
-            domain.south != MPI_PROC_NULL,
-            domain.west != MPI_PROC_NULL,
-            domain.east != MPI_PROC_NULL,
-            thread_limit);
-        log_step("halo unpack kernel complete");
-        measured.halo_h2d_time += MPI_Wtime() - halo_start;
+        // MPI_Sendrecv has completed before the synchronous unpack kernel
+        // accesses the receive buffer.
+        const double unpack_start = MPI_Wtime();
+        launch_unpack_halos(device_current, receive_buffer.data(),
+                            nx, ny, stride, halo,
+                            has_north, has_south, has_west, has_east,
+                            thread_limit);
+        measured.gpu_unpack_time += MPI_Wtime() - unpack_start;
 
-        log_step("FTCS GPU kernel begin");
         const double compute_start = MPI_Wtime();
-        launch_ftcs_device_kernel(device_current, device_next, element_count,
+        launch_ftcs_device_kernel(
+            device_current, device_next, element_count,
             stride, halo, row_begin, row_end, col_begin, col_end,
             params.rx, params.ry, thread_limit);
         measured.gpu_compute_time += MPI_Wtime() - compute_start;
+
         std::swap(device_current, device_next);
-        log_step("FTCS GPU kernel complete");
     }
 
-    log_gpu_stage(domain, steps, steps, "final device-to-host copy begin", true);
     const double final_copy_start = MPI_Wtime();
-    copy_from_device(current.data().data(), device_current, element_count, 0, device);
-    log_gpu_stage(domain, steps, steps, "final device-to-host copy complete", true);
+    copy_from_device(current.data().data(), device_current,
+                     element_count, device);
     measured.gpu_final_copy_time = MPI_Wtime() - final_copy_start;
+
     first.release();
     second.release();
-    edge_buffer.release();
+    send_buffer.release();
+    receive_buffer.release();
+
     measured.solver_time = MPI_Wtime() - solver_start;
-    if (timing != nullptr) *timing = measured;
+    if (timing != nullptr) {
+        *timing = measured;
+    }
 }
 
 ReferenceComparison compare_global_reference(

@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 #PBS -P personal-yuxuan.cai
@@ -8,21 +7,14 @@
 #PBS -j oe
 
 set -euo pipefail
-
 cd "${PBS_O_WORKDIR:?PBS_O_WORKDIR is not set}"
 
-# ==================================================
-# 1. E4-aligned environment
-# ==================================================
-
 source /app1/ebenv
-
 module load GCC/13.3.0
 module load OpenMPI/5.0.3-GCC-13.3.0
 module load CMake/3.29.3-GCCcore-13.3.0
 
 export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
-
 export OMP_DYNAMIC=FALSE
 export OMP_PLACES=cores
 export OMP_PROC_BIND=close
@@ -31,166 +23,71 @@ export E4_MPI_BINDING=vanda
 
 BUILD_DIR="build/vanda_e5_gcc13"
 
-# ==================================================
-# 2. Job information
-# ==================================================
-
 echo "========================================"
-echo " E5 MPI + OpenMP GPU Hybrid"
+echo " E5 MPI + OpenMP Direct GPU MPI Hybrid"
 echo "========================================"
-
 echo "Job ID: ${PBS_JOBID}"
 echo "Start time: $(date)"
 echo "Git commit: $(git rev-parse --short HEAD 2>/dev/null || echo unavailable)"
-
-echo
 echo "Allocated nodes and slots:"
 sort "${PBS_NODEFILE}" | uniq -c
-
-echo
-echo "Loaded modules:"
 module list
 
 echo
-echo "Compiler and runtime:"
 g++ --version
 mpicxx --showme:version
 mpirun --version
 cmake --version
-
-echo
-echo "GPU allocation:"
 nvidia-smi --query-gpu=name,compute_cap,utilization.gpu,memory.used,memory.total --format=csv,noheader
-
-# ==================================================
-# 3. PRRTE / PBS verification
-# ==================================================
-
-echo
-echo "PRRTE PBS/TM plugin dependencies:"
-
-PRTE_TM="$(dirname "$(dirname "$(command -v mpirun)")")/lib/prte/prte_mca_plm_tm.so"
-
-if [[ -f "$PRTE_TM" ]]; then
-    ldd "$PRTE_TM" | grep -E 'libpbs|not found' || true
-fi
-
-# ==================================================
-# 4. Verify E4 CPU baseline
-# ==================================================
 
 if [[ ! -f results/raw/e4_hybrid.csv ]]; then
     echo "ERROR: Missing E4 CPU baseline." >&2
     exit 1
 fi
-
 baseline_rows=$(($(wc -l < results/raw/e4_hybrid.csv) - 1))
-
 if [[ "$baseline_rows" -ne 15 ]]; then
-    echo "ERROR: E4 baseline must contain 15 configurations." >&2
+    echo "ERROR: Expected 15 E4 baseline configurations; found $baseline_rows." >&2
     exit 1
 fi
-
-echo
-echo "E4 CPU baseline: VERIFIED"
-
-# ==================================================
-# 5. Verify clean E5 result directory
-# ==================================================
-
-if [[ -e results/raw/e5_gpu.csv ||
-      -e results/raw/e5_gpu_runs.csv ]]; then
-
-    echo "ERROR: Existing E5 CSV files detected." >&2
-    echo "Archive them before submitting." >&2
-    exit 1
-fi
-
-# ==================================================
-# 6. Verify executables and libraries
-# ==================================================
 
 for executable in stencil_hybrid_gpu test_gpu; do
-
-    if [[ ! -x "${BUILD_DIR}/${executable}" ]]; then
-        echo "ERROR: Missing ${BUILD_DIR}/${executable}" >&2
+    if [[ ! -x "$BUILD_DIR/$executable" ]]; then
+        echo "ERROR: Missing $BUILD_DIR/$executable; run scripts/local/build_e5.sh." >&2
         exit 1
     fi
-
-    if ldd "${BUILD_DIR}/${executable}" | grep -q 'not found'; then
-        echo "ERROR: Missing dynamic library: ${executable}" >&2
+    if ldd "$BUILD_DIR/$executable" | grep -q 'not found'; then
+        echo "ERROR: Missing dynamic library for $executable." >&2
         exit 1
     fi
-
 done
 
-echo
-echo "E5 executables: VERIFIED"
-
-# ==================================================
-# 7. GPU numerical correctness test
-# ==================================================
+if [[ -e results/raw/e5_gpu.csv || -e results/raw/e5_gpu_runs.csv ]]; then
+    echo "ERROR: Existing E5 result files detected; archive them before formal run." >&2
+    exit 1
+fi
 
 echo
-echo "========================================"
-echo " GPU / CPU REFERENCE CORRECTNESS TEST"
-echo "========================================"
-
+echo "Running two-rank GPU/CPU numerical correctness test..."
 mpirun \
     --map-by ppr:2:node:PE=16 \
     --bind-to core \
     --report-bindings \
     -np 2 \
-    "${BUILD_DIR}/test_gpu"
+    "$BUILD_DIR/test_gpu"
 
 echo
-echo "GPU numerical correctness: PASSED"
-
-# ==================================================
-# 8. Run all five Group A configurations
-# ==================================================
-
-echo
-echo "========================================"
-echo " E5 FORMAL EXPERIMENT"
-echo " Five Group A configurations"
-echo " 10 repetitions each"
-echo "========================================"
-
+echo "Running all five Group A configurations, 10 repetitions each..."
 BUILD_DIR="$BUILD_DIR" bash scripts/local/run_e5.sh
-
-# ==================================================
-# 9. Verify formal results
-# ==================================================
-
-echo
-echo "Generated E5 GPU results:"
-
-ls -lh results/raw/e5_gpu.csv \
-       results/raw/e5_gpu_runs.csv
 
 summary_rows=$(($(wc -l < results/raw/e5_gpu.csv) - 1))
 run_rows=$(($(wc -l < results/raw/e5_gpu_runs.csv) - 1))
-
-echo
-echo "Summary configurations: ${summary_rows}/5"
-echo "Repetition records: ${run_rows}/50"
-
-if [[ "$summary_rows" -ne 5 ||
-      "$run_rows" -ne 50 ]]; then
-
+echo "Summary rows: ${summary_rows}/5"
+echo "Repetition rows: ${run_rows}/50"
+if [[ "$summary_rows" -ne 5 || "$run_rows" -ne 50 ]]; then
     echo "ERROR: E5 GPU result CSVs are incomplete." >&2
     exit 1
 fi
 
-# ==================================================
-# 10. Completion
-# ==================================================
-
 echo
-echo "========================================"
-echo " E5 GPU HYBRID COMPLETED SUCCESSFULLY"
-echo "========================================"
-
 echo "End time: $(date)"
 echo "E5 GPU Hybrid completed successfully."
