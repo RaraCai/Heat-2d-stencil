@@ -9,8 +9,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
-option(HEAT_ENABLE_NVHPC_GPU "Build E5 with NVHPC OpenMP GPU offload" OFF)
-set(HEAT_NVHPC_GPU_ARCH "cc86" CACHE STRING "NVHPC GPU architecture (for example cc86)")
+option(HEAT_ENABLE_GCC_NVPTX
+       "Build E5 with GCC OpenMP offloading for NVIDIA GPUs" OFF)
+
+if(HEAT_ENABLE_GCC_NVPTX)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message(FATAL_ERROR
+            "HEAT_ENABLE_GCC_NVPTX requires GCC; found ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+    message(STATUS "E5 GCC NVPTX offloading enabled (-foffload=nvptx-none)")
+endif()
 
 add_library(heat_core STATIC
     src/core/grid.cpp
@@ -53,16 +61,17 @@ target_link_libraries(heat_gpu PUBLIC heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
 target_compile_options(heat_gpu PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(stencil_hybrid_gpu src/hybrid_gpu.cpp)
-target_link_libraries(stencil_hybrid_gpu PRIVATE heat_gpu heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
+target_link_libraries(stencil_hybrid_gpu PRIVATE
+    heat_gpu heat_mpi MPI::MPI_CXX OpenMP::OpenMP_CXX)
 target_compile_options(stencil_hybrid_gpu PRIVATE -Wall -Wextra -Wpedantic)
 
-if(HEAT_ENABLE_NVHPC_GPU)
-    foreach(target heat_gpu stencil_hybrid_gpu)
-        target_compile_options(${target} PRIVATE
-            -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
-        target_link_options(${target} PRIVATE
-            -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
-    endforeach()
+# GCC must see the NVPTX offload option when compiling every translation unit
+# that contains an OpenMP target region, and again when linking final binaries.
+if(HEAT_ENABLE_GCC_NVPTX)
+    target_compile_options(heat_core PRIVATE -foffload=nvptx-none)
+    target_compile_options(heat_gpu PRIVATE -foffload=nvptx-none)
+    target_compile_options(stencil_hybrid_gpu PRIVATE -foffload=nvptx-none)
+    target_link_options(stencil_hybrid_gpu PRIVATE -foffload=nvptx-none)
 endif()
 
 include(CTest)
@@ -82,9 +91,13 @@ if(BUILD_TESTING)
     add_executable(test_gpu tests/test_gpu.cpp)
     target_link_libraries(test_gpu PRIVATE heat_gpu MPI::MPI_CXX OpenMP::OpenMP_CXX)
     target_compile_options(test_gpu PRIVATE -Wall -Wextra -Wpedantic)
-    if(HEAT_ENABLE_NVHPC_GPU)
-        target_compile_options(test_gpu PRIVATE -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
-        target_link_options(test_gpu PRIVATE -mp=gpu -gpu=${HEAT_NVHPC_GPU_ARCH})
+
+    if(HEAT_ENABLE_GCC_NVPTX)
+        target_compile_options(test_gpu PRIVATE -foffload=nvptx-none)
+        target_link_options(test_gpu PRIVATE -foffload=nvptx-none)
+        # The real-GPU reference test is launched explicitly by the PBS scripts
+        # with the same PPR/PE/core binding policy as E4. Do not register it as
+        # a generic CTest command, which would omit that placement policy.
     else()
         add_test(
             NAME gpu_resident_host_reference_single_rank
