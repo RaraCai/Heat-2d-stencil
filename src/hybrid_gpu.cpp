@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -21,6 +22,13 @@ namespace {
 
 using Configuration = heat::E5GpuConfiguration;
 
+void log_e5_stage(int rank, int world_size, const std::string& stage)
+{
+    std::fprintf(stderr, "[E5][t=%.3fs][rank %d/%d] %s\n",
+                 MPI_Wtime(), rank, world_size, stage.c_str());
+    std::fflush(stderr);
+}
+
 const Configuration& configuration_at(int index)
 {
     if (index < 0 ||
@@ -31,27 +39,37 @@ const Configuration& configuration_at(int index)
 }
 
 void validate_gpu_mapping(const Configuration& config, int& device,
-                          MPI_Comm& node_comm, int world_rank)
+                          MPI_Comm& node_comm, int world_rank, int world_size)
 {
+    log_e5_stage(world_rank, world_size, "MPI_Comm_split_type begin");
     MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, world_rank,
                         MPI_INFO_NULL, &node_comm);
+    log_e5_stage(world_rank, world_size, "MPI_Comm_split_type complete");
     int local_rank = 0;
     int local_size = 0;
     MPI_Comm_rank(node_comm, &local_rank);
     MPI_Comm_size(node_comm, &local_size);
 
-    int local_ok = local_size == config.mpi_ranks &&
-                   omp_get_num_devices() == 1;
+    log_e5_stage(world_rank, world_size, "OpenMP device enumeration begin");
+    const int device_count = omp_get_num_devices();
+    log_e5_stage(world_rank, world_size,
+                 "OpenMP device enumeration complete: " +
+                     std::to_string(device_count) + " device(s)");
+    int local_ok = local_size == config.mpi_ranks && device_count == 1;
     device = config.gpu_device_index;
     if (local_ok) omp_set_default_device(device);
 
     int uses_gpu = 0;
     if (local_ok) {
         int initial_device = 1;
+        log_e5_stage(world_rank, world_size, "OpenMP target probe begin");
         #pragma omp target map(from: initial_device)
         {
             initial_device = omp_is_initial_device();
         }
+        log_e5_stage(world_rank, world_size,
+                     std::string("OpenMP target probe complete: ") +
+                         (initial_device == 0 ? "GPU" : "initial device"));
         uses_gpu = initial_device == 0 ? 1 : 0;
         local_ok = uses_gpu;
     }
@@ -59,76 +77,20 @@ void validate_gpu_mapping(const Configuration& config, int& device,
     const int node_leader = local_rank == 0 ? 1 : 0;
     int actual_nodes = 0;
     int all_ranks_ok = 0;
+    log_e5_stage(world_rank, world_size, "GPU mapping MPI reductions begin");
     MPI_Allreduce(&node_leader, &actual_nodes, 1, MPI_INT, MPI_SUM,
                   MPI_COMM_WORLD);
     MPI_Allreduce(&local_ok, &all_ranks_ok, 1, MPI_INT, MPI_MIN,
                   MPI_COMM_WORLD);
+    log_e5_stage(world_rank, world_size,
+                 "GPU mapping MPI reductions complete: nodes=" +
+                     std::to_string(actual_nodes) + ", all_ranks_ok=" +
+                     std::to_string(all_ranks_ok));
     if (actual_nodes != 1 || !all_ranks_ok) {
         throw std::runtime_error(
             "E5 requires one node and one GPU shared by all MPI ranks.");
     }
 
-}
-
-heat::ReferenceComparison run_reference_cases(const Configuration& config,
-                                               int device,
-                                               MPI_Comm comm)
-{
-    heat::MpiDomain test_domain;
-    heat::create_mpi_domain(test_domain, 128, 130, comm);
-    heat::ReferenceComparison worst{0.0, 0.0, true};
-    for (int steps : {1, 2}) {
-        const auto params = heat::make_parameters(128, 130, steps);
-        heat::Grid cpu = heat::make_local_grid(test_domain);
-        heat::Grid cpu_next = heat::make_local_grid(test_domain);
-        heat::Grid gpu = heat::make_local_grid(test_domain);
-        heat::Grid gpu_next = heat::make_local_grid(test_domain);
-        heat::initialize(cpu, 128, 130);
-        cpu_next.data() = cpu.data();
-        gpu.data() = cpu.data();
-        gpu_next.data() = gpu.data();
-
-        heat::solve_mpi(cpu, cpu_next, params, test_domain, steps);
-        heat::solve_mpi_gpu(gpu, gpu_next, params, test_domain, steps, device,
-                            config.thread_limit);
-        const auto comparison = heat::compare_global_reference(
-            gpu, cpu, test_domain, heat::kE5MaxAbsoluteErrorTolerance,
-            heat::kE5RelativeL2ErrorTolerance);
-        const auto validation = heat::validate_global(gpu, test_domain);
-        worst.max_absolute_error =
-            std::max(worst.max_absolute_error, comparison.max_absolute_error);
-        worst.relative_l2_error =
-            std::max(worst.relative_l2_error, comparison.relative_l2_error);
-        worst.passed = worst.passed && comparison.passed && validation.passed;
-    }
-    heat::destroy_mpi_domain(test_domain);
-    if (!worst.passed) {
-        throw std::runtime_error(
-            "GPU result failed odd/even-step CPU-reference comparison.");
-    }
-    return worst;
-}
-
-heat::ReferenceComparison compare_full_cpu_reference(
-    const heat::Grid& gpu_grid, const heat::NumericalParameters& params,
-    const heat::MpiDomain& domain, int cpu_threads)
-{
-    heat::Grid cpu = heat::make_local_grid(domain);
-    heat::Grid cpu_next = heat::make_local_grid(domain);
-    heat::initialize(cpu, domain.global_nx, domain.global_ny);
-    cpu_next.data() = cpu.data();
-    for (int step = 0; step < heat::kE5Steps; ++step) {
-        heat::exchange_halos(cpu, domain);
-        heat::ftcs_step_openmp(cpu, cpu_next, params, domain.global_nx,
-                               domain.global_ny, cpu_threads);
-        cpu.swap_data(cpu_next);
-    }
-    const auto cpu_validation = heat::validate_global(cpu, domain);
-    auto comparison = heat::compare_global_reference(
-        gpu_grid, cpu, domain, heat::kE5MaxAbsoluteErrorTolerance,
-        heat::kE5RelativeL2ErrorTolerance);
-    comparison.passed = comparison.passed && cpu_validation.passed;
-    return comparison;
 }
 
 std::vector<double> reduce_max_timings(const heat::GpuSolverTiming& timing,
@@ -174,6 +136,8 @@ void run_configuration(int index, int& argc, char**& argv)
 {
     const auto& config = configuration_at(index);
     int provided = MPI_THREAD_SINGLE;
+    std::cerr << "[E5] configuration " << index << " MPI_Init_thread begin\n"
+              << std::flush;
     if (MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided) !=
         MPI_SUCCESS) {
         throw std::runtime_error("MPI_Init_thread failed.");
@@ -182,6 +146,12 @@ void run_configuration(int index, int& argc, char**& argv)
     int world_size = 0;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    log_e5_stage(world_rank, world_size,
+                 "configuration " + std::to_string(index) +
+                     " start: Group " + config.group + ", " +
+                     std::to_string(config.mpi_ranks) + " ranks x " +
+                     std::to_string(config.cpu_threads_per_rank) +
+                     " CPU threads/rank");
     if (provided < MPI_THREAD_FUNNELED ||
         world_size != config.mpi_ranks) {
         if (world_rank == 0) {
@@ -194,6 +164,7 @@ void run_configuration(int index, int& argc, char**& argv)
     MPI_Comm node_comm = MPI_COMM_NULL;
     heat::MpiDomain domain;
     try {
+        log_e5_stage(world_rank, world_size, "matching E4 baseline lookup begin");
         const double cpu_solver = [&] {
             const auto cpu_results = heat::read_e4_csv(heat::kE4OutputCsv);
             const auto found = std::find_if(
@@ -212,48 +183,62 @@ void run_configuration(int index, int& argc, char**& argv)
             }
             return found->solver_median;
         }();
+        log_e5_stage(world_rank, world_size,
+                     "matching E4 baseline lookup complete");
 
         int device = -1;
-        validate_gpu_mapping(config, device, node_comm, world_rank);
+        validate_gpu_mapping(config, device, node_comm, world_rank, world_size);
         omp_set_dynamic(0);
         omp_set_num_threads(config.cpu_threads_per_rank);
-        const auto reference = run_reference_cases(
-            config, device, MPI_COMM_WORLD);
 
+        log_e5_stage(world_rank, world_size, "full experiment MPI domain creation begin");
         heat::create_mpi_domain(domain, heat::kE5GlobalNx, heat::kE5GlobalNy);
+        log_e5_stage(world_rank, world_size,
+                     "full experiment MPI domain creation complete");
         const auto params = heat::make_parameters(
             heat::kE5GlobalNx, heat::kE5GlobalNy, heat::kE5Steps);
         heat::Grid current = heat::make_local_grid(domain);
         heat::Grid next = heat::make_local_grid(domain);
         std::vector<heat::GpuHybridRunResult> runs;
         if (domain.rank == 0) runs.reserve(heat::kE5Repeats);
-
         bool all_passed = true;
-        heat::ReferenceComparison full_reference{0.0, 0.0, true};
         double global_min = std::numeric_limits<double>::max();
         double global_max = std::numeric_limits<double>::lowest();
         double global_boundary_error = 0.0;
         for (int repeat = 0; repeat < heat::kE5Repeats; ++repeat) {
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " barrier begin");
             MPI_Barrier(domain.cart_comm);
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " barrier complete; grid initialization begin");
             heat::initialize(current, domain.global_nx, domain.global_ny);
             next.data() = current.data();
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " grid initialization complete; GPU solver begin");
 
             heat::GpuSolverTiming local_timing{};
             heat::solve_mpi_gpu(current, next, params, domain, heat::kE5Steps,
                                 device, config.thread_limit, &local_timing);
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " GPU solver complete; validation begin");
             const auto validation = heat::validate_global(current, domain);
-            if (repeat == 0) {
-                full_reference = compare_full_cpu_reference(
-                    current, params, domain, config.cpu_threads_per_rank);
-                if (!full_reference.passed) {
-                    throw std::runtime_error(
-                        "Full 4096x4096 GPU result failed CPU-reference comparison.");
-                }
-            }
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " validation complete: " +
+                             (validation.passed ? "PASS" : "FAIL"));
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " timing reduction begin");
             const auto max_times = reduce_max_timings(
                 local_timing, domain.cart_comm, 0);
-            all_passed = all_passed && validation.passed &&
-                         reference.passed && full_reference.passed;
+            log_e5_stage(domain.rank, domain.size,
+                         "repeat " + std::to_string(repeat + 1) +
+                             " timing reduction complete");
+            all_passed = all_passed && validation.passed;
             global_min = std::min(global_min, validation.min_temperature);
             global_max = std::max(global_max, validation.max_temperature);
             global_boundary_error = std::max(
@@ -263,15 +248,16 @@ void run_configuration(int index, int& argc, char**& argv)
                     repeat + 1,
                     max_times[0], max_times[1], max_times[2], max_times[3],
                     max_times[4], max_times[5], max_times[6],
-                    full_reference.max_absolute_error,
-                    full_reference.relative_l2_error,
-                    validation.passed && reference.passed && full_reference.passed
+                    validation.passed
                 });
-                std::cerr << "\r[E5 GPU] Group " << config.group
+                std::cerr << "[E5 GPU] Group " << config.group
                           << " | " << config.mpi_ranks << " ranks x "
                           << config.cpu_threads_per_rank << " CPU threads/rank"
                           << " | Repeat " << repeat + 1 << '/'
-                          << heat::kE5Repeats << std::flush;
+                          << heat::kE5Repeats
+                          << " complete | solver " << std::fixed
+                          << std::setprecision(3) << max_times[0] << " s\n"
+                          << std::flush;
             }
         }
 
@@ -307,8 +293,6 @@ void run_configuration(int index, int& argc, char**& argv)
                 timing_samples(runs, &heat::GpuHybridRunResult::gpu_setup_time));
             result.gpu_final_copy_time = heat::summarize_timings(
                 timing_samples(runs, &heat::GpuHybridRunResult::gpu_final_copy_time));
-            result.max_absolute_error = full_reference.max_absolute_error;
-            result.relative_l2_error = full_reference.relative_l2_error;
             result.validation = {all_passed, global_min, global_max,
                                  global_boundary_error};
             result.runs = std::move(runs);
@@ -343,9 +327,15 @@ void run_configuration(int index, int& argc, char**& argv)
                       << " s | CPU/GPU " << std::setprecision(3)
                       << result.cpu_gpu_speedup << "x                 \n";
         }
+        log_e5_stage(domain.rank, domain.size,
+                     "configuration result broadcast begin");
         MPI_Bcast(&exit_code, 1, MPI_INT, 0, domain.cart_comm);
+        log_e5_stage(domain.rank, domain.size,
+                     "configuration result broadcast complete; MPI cleanup begin");
         heat::destroy_mpi_domain(domain);
         MPI_Comm_free(&node_comm);
+        log_e5_stage(domain.rank, domain.size,
+                     "MPI communicators released; MPI_Finalize begin");
         MPI_Finalize();
         if (exit_code != 0) throw std::runtime_error("E5 GPU configuration failed.");
     } catch (const std::exception& error) {

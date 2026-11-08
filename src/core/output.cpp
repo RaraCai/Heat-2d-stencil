@@ -695,8 +695,7 @@ void write_e5_gpu_header(std::ostream& file)
             "halo_h2d_median_s,halo_h2d_mean_s,halo_h2d_stddev_s,"
             "gpu_setup_median_s,gpu_setup_mean_s,gpu_setup_stddev_s,"
             "gpu_final_copy_median_s,gpu_final_copy_mean_s,gpu_final_copy_stddev_s,"
-            "max_absolute_error,relative_l2_error,min_temperature,max_temperature,"
-            "max_boundary_error,validation_passed\n";
+            "min_temperature,max_temperature,max_boundary_error,validation_passed\n";
 }
 
 void write_e5_gpu_row(std::ostream& file,
@@ -723,8 +722,7 @@ void write_e5_gpu_row(std::ostream& file,
     write_timing_columns(file, result.gpu_setup_time);
     file << ',';
     write_timing_columns(file, result.gpu_final_copy_time);
-    file << ',' << result.max_absolute_error << ',' << result.relative_l2_error
-         << ',' << result.validation.min_temperature << ','
+    file << ',' << result.validation.min_temperature << ','
          << result.validation.max_temperature << ','
          << result.validation.max_boundary_error << ','
          << (result.validation.passed ? 1 : 0) << '\n';
@@ -808,7 +806,7 @@ void append_e5_gpu_runs_csv(const GpuHybridExperimentResult& result,
                 "repetition,solver_time_s,"
                 "mpi_halo_time_s,gpu_compute_time_s,boundary_d2h_time_s,"
                 "halo_h2d_time_s,gpu_setup_time_s,gpu_final_copy_time_s,"
-                "max_absolute_error,relative_l2_error,validation_passed\n";
+                "validation_passed\n";
     }
     file << std::setprecision(12);
     for (const auto& run : result.runs) {
@@ -820,7 +818,6 @@ void append_e5_gpu_runs_csv(const GpuHybridExperimentResult& result,
              << run.mpi_halo_time << ',' << run.gpu_compute_time << ','
              << run.boundary_d2h_time << ',' << run.halo_h2d_time << ','
              << run.gpu_setup_time << ',' << run.gpu_final_copy_time << ','
-             << run.max_absolute_error << ',' << run.relative_l2_error << ','
              << (run.passed ? 1 : 0) << '\n';
     }
     if (!file) throw std::runtime_error("Failed while writing E5 GPU runs CSV: " + path);
@@ -866,8 +863,6 @@ std::vector<GpuHybridExperimentResult> read_e5_gpu_csv(const std::string& path)
         result.halo_h2d_time = read_timing(fields, header, "halo_h2d", path);
         result.gpu_setup_time = read_timing(fields, header, "gpu_setup", path);
         result.gpu_final_copy_time = read_timing(fields, header, "gpu_final_copy", path);
-        result.max_absolute_error = std::stod(fields[index("max_absolute_error")]);
-        result.relative_l2_error = std::stod(fields[index("relative_l2_error")]);
         result.validation.min_temperature = std::stod(fields[index("min_temperature")]);
         result.validation.max_temperature = std::stod(fields[index("max_temperature")]);
         result.validation.max_boundary_error =

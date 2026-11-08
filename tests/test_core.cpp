@@ -171,8 +171,6 @@ bool test_e5_gpu_csv_output()
             result.halo_h2d_time={0.04,0.04,0.004};
             result.gpu_setup_time={0.05,0.05,0.005};
             result.gpu_final_copy_time={0.06,0.06,0.006};
-            result.max_absolute_error=1e-10;
-            result.relative_l2_error=1e-12;
             result.validation={true,20.0,99.0,0.0};
             for(int repetition=1;repetition<=heat::kE5Repeats;++repetition) {
                 heat::GpuHybridRunResult run{};
@@ -190,9 +188,18 @@ bool test_e5_gpu_csv_output()
         std::ifstream summary_file(summary_path);
         std::ifstream runs_file(runs_path);
         std::string line;
-        int summary_lines=0;
+        std::getline(summary_file,line);
+        const bool summary_schema_clean=
+            line.find("max_absolute_error")==std::string::npos &&
+            line.find("relative_l2_error")==std::string::npos &&
+            line.find("cpu_solver_median_s")!=std::string::npos;
+        std::getline(runs_file,line);
+        const bool runs_schema_clean=
+            line.find("max_absolute_error")==std::string::npos &&
+            line.find("relative_l2_error")==std::string::npos;
+        int summary_lines=1;
         while(std::getline(summary_file,line))++summary_lines;
-        int run_lines=0;
+        int run_lines=1;
         while(std::getline(runs_file,line))++run_lines;
 
         bool duplicate_rejected=false;
@@ -214,6 +221,7 @@ bool test_e5_gpu_csv_output()
             results.front().within_group_configuration_speedup==1.0 &&
             results.back().within_group_configuration_speedup==16.0 &&
             summary_lines==6 && run_lines==51 && duplicate_rejected &&
+            summary_schema_clean && runs_schema_clean &&
             summary.str().find("E5 | GROUP A MPI + OPENMP GPU HYBRID")!=std::string::npos &&
             summary.str().find("Cross-Group")==std::string::npos &&
             summary.str().find("Group B")==std::string::npos &&

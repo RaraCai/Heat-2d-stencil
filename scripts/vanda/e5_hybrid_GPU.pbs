@@ -41,7 +41,7 @@ cmake --version
 echo
 echo "GPU allocation:"
 if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader
+    nvidia-smi --query-gpu=name,compute_cap,utilization.gpu,memory.used,memory.total --format=csv,noheader
 else
     echo "nvidia-smi unavailable; OpenMP device checks will verify GPU availability."
 fi
@@ -68,6 +68,7 @@ fi
 
 echo
 echo "Running the five E5 Group A configurations on one GPU."
+echo "Rank-tagged stage progress is flushed to this job log; follow with tail -f."
 BUILD_DIR="$BUILD_DIR" bash ./scripts/local/run_e5.sh
 
 echo

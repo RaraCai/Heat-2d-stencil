@@ -137,8 +137,6 @@ struct GpuHybridRunResult {
     double halo_h2d_time = 0.0;
     double gpu_setup_time = 0.0;
     double gpu_final_copy_time = 0.0;
-    double max_absolute_error = 0.0;
-    double relative_l2_error = 0.0;
     bool passed = false;
 };
 
@@ -163,8 +161,6 @@ struct GpuHybridExperimentResult {
     TimingStatistics halo_h2d_time;
     TimingStatistics gpu_setup_time;
     TimingStatistics gpu_final_copy_time;
-    double max_absolute_error = 0.0;
-    double relative_l2_error = 0.0;
     ValidationResult validation{};
     std::vector<GpuHybridRunResult> runs;
 };

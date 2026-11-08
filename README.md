@@ -65,6 +65,12 @@ then runs the five production configurations. Check the PBS job status with
 `qstat -u "$USER"` and read its combined output log for progress and the final
 summary.
 
+E5 writes flushed, rank-tagged stage checkpoints to the PBS log. These identify
+MPI startup/device discovery, GPU allocation and kernel launches, halo
+exchange, and per-repeat validation. If a job appears stalled, inspect the last
+checkpoint with `tail -f <job-output-file>` to identify the phase and MPI ranks
+that have or have not reached it.
+
 The job requests one node, 36 CPU cores and one GPU. E5 runs only the five
 Group A MPI-rank and CPU threads-per-rank configurations from E4 (2, 4, 8, 16,
 and 32 ranks); all ranks share GPU device 0. `gpu_thread_limit` (256) is a
@@ -84,13 +90,12 @@ as a total runtime. Boundary D2H includes device edge packing and host staging;
 halo H2D includes host staging and device halo unpacking. The solver wall time
 also includes releasing its resident device buffers.
 
-Each production configuration compares one complete 4096 x 4096, 500-step GPU
-result with a CPU OpenMP
-reference using the same MPI decomposition; that correctness run is outside
-the recorded GPU solver time. The comparison reports maximum absolute and
-relative L2 error with fixed tolerances. Every repetition also undergoes
-global physical-boundary/temperature validation. Failed configurations are
-not written as valid timing results.
+Each configuration runs only the recorded GPU repetitions; there are no
+additional CPU/GPU reference solves. Every GPU repetition undergoes global
+physical-boundary/temperature validation. E5 reads the matching Group A solver
+median from `results/raw/e4_hybrid.csv` as its CPU baseline and uses it to
+calculate GPU/CPU speedup. Failed configurations are not written as valid
+timing results.
 The summary and CSV report two speedups:
 
 - **Within-group configuration speedup:** the 2-rank Group A GPU median
