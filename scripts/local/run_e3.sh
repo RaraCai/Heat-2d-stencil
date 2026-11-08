@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -5,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 BUILD_DIR="${BUILD_DIR:-build/release}"
+
 REQUESTED_RANKS=("$@")
 if [ ${#REQUESTED_RANKS[@]} -eq 0 ]; then
     REQUESTED_RANKS=(1 4 16 64 256)
@@ -26,12 +28,24 @@ for supported_ranks in 1 4 16 64 256; do
         fi
     done
 done
+
 if [ "${RANKS_TO_RUN[0]}" != 1 ]; then
     RANKS_TO_RUN=(1 "${RANKS_TO_RUN[@]}")
 fi
 
-cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$BUILD_DIR"
+echo "Configuring E3 CPU-only build..."
+
+cmake -S . -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=ON \
+    -DHEAT_ENABLE_NVHPC_GPU=OFF \
+    -DCMAKE_CXX_FLAGS="-foffload=disable"
+
+echo "Building E3 targets..."
+
+cmake --build "$BUILD_DIR" \
+    --target stencil_weak_mpi test_core test_mpi \
+    --parallel 4
 
 mkdir -p results/raw
 rm -f results/raw/e3_weak.csv

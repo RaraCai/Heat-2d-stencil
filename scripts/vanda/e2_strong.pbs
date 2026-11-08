@@ -1,8 +1,9 @@
+
 #!/bin/bash
 
 #PBS -P personal-linxi.li
 #PBS -N heat_e2_strong
-#PBS -l select=4:ncpus=72:mpiprocs=72:ompthreads=1:mem=8gb
+#PBS -l select=4:ncpus=72:mpiprocs=72:ompthreads=1:mem=500gb
 #PBS -l walltime=01:00:00
 #PBS -j oe
 
@@ -13,7 +14,7 @@ cd "${PBS_O_WORKDIR:?PBS_O_WORKDIR is not set}"
 echo "E2 MPI Strong Scaling"
 echo "Job ID: ${PBS_JOBID}"
 echo "Compute Nodes:"
-sort -u "${PBS_NODEFILE}" 
+sort -u "${PBS_NODEFILE}"
 echo "Start Time: $(date)"
 echo "Git Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unavailable)"
 
@@ -23,12 +24,8 @@ module load GCC/13.3.0
 module load OpenMPI/5.0.3-GCC-13.3.0
 module load CMake/3.29.3-GCCcore-13.3.0
 
-# Ensure PBS and GCC runtime libraries are available
+# Required for the PRRTE PBS/TM launcher on Vanda.
 export LD_LIBRARY_PATH="/opt/pbs/lib:${LD_LIBRARY_PATH:-}"
-
-echo
-echo "PBS TM Plugin Dependencies:"
-ldd /app1/ebapps/arches/flat-avx512/software/OpenMPI/5.0.3-GCC-13.3.0/lib/prte/prte_mca_plm_tm.so
 
 echo
 echo "Loaded Modules:"
@@ -51,6 +48,12 @@ echo
 echo "CMake:"
 cmake --version
 
+echo
+echo "GCC OpenMP CPU-only Configuration:"
+echo "HEAT_ENABLE_NVHPC_GPU=OFF"
+echo "CMAKE_CXX_FLAGS=-foffload=disable"
+
+# Check E1 Serial Baseline.
 BASELINE="results/raw/e1_serial.csv"
 
 if [[ ! -f "${BASELINE}" ]]; then
@@ -72,24 +75,28 @@ echo
 echo "E1 Serial Baseline:"
 grep '^4096,' "${BASELINE}"
 
-BUILD_DIR="build/vanda"
+BUILD_DIR="build/vanda_e2"
 
 mkdir -p "${BUILD_DIR}" results/raw
 
 echo
-echo "Configuring project..."
+echo "Configuring E2 CPU-only project..."
 
 cmake -S . -B "${BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTING=ON
+    -DBUILD_TESTING=ON \
+    -DHEAT_ENABLE_NVHPC_GPU=OFF \
+    -DCMAKE_CXX_FLAGS="-foffload=disable"
 
 echo
-echo "Building project..."
+echo "Building E2 targets..."
 
-cmake --build "${BUILD_DIR}" --parallel 4
+cmake --build "${BUILD_DIR}" \
+    --target stencil_strong_mpi test_core test_mpi \
+    --parallel 4
 
 echo
-echo "Running tests..."
+echo "Running project tests..."
 
 ctest --test-dir "${BUILD_DIR}" --output-on-failure
 
@@ -109,15 +116,28 @@ fi
 echo
 echo "Running complete E2 Strong Scaling..."
 
-BUILD_DIR="${BUILD_DIR}" ./scripts/local/run_e2.sh
+BUILD_DIR="${BUILD_DIR}" bash ./scripts/local/run_e2.sh
 
 echo
-echo "Final E2 Summary:"
-./build/vanda/stencil_strong_mpi --summary
+echo "Final E2 Summary..."
+
+"${BUILD_DIR}/stencil_strong_mpi" --summary
 
 echo
 echo "Generated E2 Results:"
 ls -lh results/raw/e2_*.csv
+
+echo
+echo "Checking E2 CSV row count..."
+
+E2_ROWS=$(($(wc -l < results/raw/e2_strong.csv) - 1))
+
+echo "E2 configurations: ${E2_ROWS}/5"
+
+if [[ "${E2_ROWS}" -ne 5 ]]; then
+    echo "Error: E2 result CSV is incomplete." >&2
+    exit 1
+fi
 
 echo
 echo "End Time: $(date)"
