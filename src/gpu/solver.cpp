@@ -9,18 +9,14 @@
 
 namespace heat {
 
-void launch_ftcs_device_kernel(const double* current, double* next,
-                               std::size_t size, int stride, int halo,
-                               int row_begin, int row_end, int col_begin,
-                               int col_end, double rx, double ry,
-                               int thread_limit);
+void launch_ftcs_and_pack_device_kernel(
+    const double* current, double* next, const double* received, double* packed,
+    int nx, int ny, int stride, int halo, int row_begin, int row_end,
+    int col_begin, int col_end, double rx, double ry,
+    int north, int south, int west, int east, int thread_limit);
 void launch_pack_owned_edges(const double* grid, double* packed,
                              int nx, int ny, int stride, int halo,
                              int thread_limit);
-void launch_unpack_halos(double* grid, const double* packed,
-                         int nx, int ny, int stride, int halo,
-                         int north, int south, int west, int east,
-                         int thread_limit);
 
 namespace {
 
@@ -158,10 +154,13 @@ void solve_mpi_gpu(Grid& current, const Grid& next,
 {
     validate_layout(current, next, domain);
 
-    const bool is_gpu_device = device >= 0 && device < omp_get_num_devices();
-    if (steps < 0 || !is_gpu_device || thread_limit < 1) {
+    const int initial_device = omp_get_initial_device();
+    const bool is_valid_device =
+        device == initial_device ||
+        (device >= 0 && device < omp_get_num_devices());
+    if (steps < 0 || !is_valid_device || thread_limit < 1) {
         throw std::invalid_argument(
-            "E5 requires a valid GPU device, nonnegative steps, and positive thread_limit.");
+            "E5 requires a valid device, nonnegative steps, and positive thread_limit.");
     }
     if (omp_get_default_device() != device) {
         omp_set_default_device(device);
@@ -208,34 +207,24 @@ void solve_mpi_gpu(Grid& current, const Grid& next,
     const int has_west = domain.west != MPI_PROC_NULL;
     const int has_east = domain.east != MPI_PROC_NULL;
 
-    for (int step = 0; step < steps; ++step) {
-        // OpenMP target regions are synchronous here. Returning from the
-        // pack launch guarantees the send buffer is ready for MPI.
-        const double pack_start = MPI_Wtime();
-        launch_pack_owned_edges(device_current, send_buffer.data(),
-                                nx, ny, stride, halo, thread_limit);
-        measured.gpu_pack_time += MPI_Wtime() - pack_start;
+    const double pack_start = MPI_Wtime();
+    launch_pack_owned_edges(device_current, send_buffer.data(),
+                            nx, ny, stride, halo, thread_limit);
+    measured.gpu_pack_time += MPI_Wtime() - pack_start;
 
+    for (int step = 0; step < steps; ++step) {
         // OpenMPI CUDA-aware support was verified separately with
         // omp_target_alloc pointers. No application-side D2H/H2D staging
         // is performed in this halo path.
         exchange_device_halos(send_buffer.data(), receive_buffer.data(),
                               nx, ny, domain, &measured.mpi_halo_time);
 
-        // MPI_Sendrecv has completed before the synchronous unpack kernel
-        // accesses the receive buffer.
-        const double unpack_start = MPI_Wtime();
-        launch_unpack_halos(device_current, receive_buffer.data(),
-                            nx, ny, stride, halo,
-                            has_north, has_south, has_west, has_east,
-                            thread_limit);
-        measured.gpu_unpack_time += MPI_Wtime() - unpack_start;
-
         const double compute_start = MPI_Wtime();
-        launch_ftcs_device_kernel(
-            device_current, device_next, element_count,
-            stride, halo, row_begin, row_end, col_begin, col_end,
-            params.rx, params.ry, thread_limit);
+        launch_ftcs_and_pack_device_kernel(
+            device_current, device_next, receive_buffer.data(),
+            send_buffer.data(), nx, ny, stride, halo,
+            row_begin, row_end, col_begin, col_end, params.rx, params.ry,
+            has_north, has_south, has_west, has_east, thread_limit);
         measured.gpu_compute_time += MPI_Wtime() - compute_start;
 
         std::swap(device_current, device_next);

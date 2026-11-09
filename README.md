@@ -65,11 +65,9 @@ then runs the five production configurations. Check the PBS job status with
 `qstat -u "$USER"` and read its combined output log for progress and the final
 summary.
 
-E5 writes flushed, rank-tagged stage checkpoints to the PBS log. These identify
-MPI startup/device discovery, GPU allocation and kernel launches, halo
-exchange, and per-repeat validation. If a job appears stalled, inspect the last
-checkpoint with `tail -f <job-output-file>` to identify the phase and MPI ranks
-that have or have not reached it.
+E5 reports concise rank-0 repetition progress and a configuration summary to
+the PBS log. Errors remain explicit; normal execution does not emit per-rank
+stage diagnostics.
 
 The job requests one node, 36 CPU cores and one GPU. E5 runs only the five
 Group A MPI-rank and CPU threads-per-rank configurations from E4 (2, 4, 8, 16,
@@ -79,16 +77,18 @@ rank placement. Static configuration checks and runtime rank/node/device
 checks reject oversubscribed or mismatched layouts.
 
 The GPU Solver keeps two full grids resident on the GPU for all 500 steps.
-Each step packs owned edges into a small device buffer, copies those edges to
-the host for the existing MPI halo exchange, copies received halos back, then
-launches the FTCS kernel and swaps device-buffer roles. Only setup and the
-final result copy transfer complete grids. Solver time includes setup,
-iterations, halo synchronization and the final copy. The output also separates
-MPI halo, GPU compute/kernel launch, boundary D2H, halo H2D, setup, and final
-copy timing; component maxima are diagnostics and must not be added together
-as a total runtime. Boundary D2H includes device edge packing and host staging;
-halo H2D includes host staging and device halo unpacking. The solver wall time
-also includes releasing its resident device buffers.
+Owned edges are packed into OpenMP device buffers and exchanged directly with
+blocking MPI calls; the application does not stage halos through host memory.
+After each exchange, one GPU kernel reads remote face values from the receive
+buffer directly, updates the owned grid, and packs the updated edges for the
+next step. This avoids separate per-step pack and halo-unpack kernel launches.
+Only setup and the final result copy transfer complete grids. Solver time
+includes setup, iterations, halo synchronization and the final copy. The output
+separates MPI halo, GPU compute, setup, and final-copy timing; component maxima
+are diagnostics and must not be added together as a total runtime. Initial edge
+packing is reported as GPU pack time; pack work fused into each stencil launch
+is included in GPU compute time, and no separate halo-unpack launch remains.
+The solver wall time also includes releasing its resident device buffers.
 
 Each configuration runs only the recorded GPU repetitions; there are no
 additional CPU/GPU reference solves. Every GPU repetition undergoes global
