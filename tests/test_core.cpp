@@ -167,8 +167,8 @@ bool test_e5_gpu_csv_output()
             result.solver_time={runtime,runtime+0.1,0.1};
             result.mpi_halo_time={0.1,0.1,0.01};
             result.gpu_compute_time={0.2,0.2,0.02};
-            result.boundary_d2h_time={0.03,0.03,0.003};
-            result.halo_h2d_time={0.04,0.04,0.004};
+            result.gpu_pack_time={0.03,0.03,0.003};
+            result.gpu_unpack_time={0.04,0.04,0.004};
             result.gpu_setup_time={0.05,0.05,0.005};
             result.gpu_final_copy_time={0.06,0.06,0.006};
             result.validation={true,20.0,99.0,0.0};
@@ -176,6 +176,8 @@ bool test_e5_gpu_csv_output()
                 heat::GpuHybridRunResult run{};
                 run.repetition=repetition;
                 run.solver_time=runtime;
+                run.gpu_pack_time=0.03;
+                run.gpu_unpack_time=0.04;
                 run.passed=true;
                 result.runs.push_back(run);
             }

@@ -133,8 +133,8 @@ struct GpuHybridRunResult {
     double solver_time = 0.0;
     double mpi_halo_time = 0.0;
     double gpu_compute_time = 0.0;
-    double boundary_d2h_time = 0.0;
-    double halo_h2d_time = 0.0;
+    double gpu_pack_time = 0.0;
+    double gpu_unpack_time = 0.0;
     double gpu_setup_time = 0.0;
     double gpu_final_copy_time = 0.0;
     bool passed = false;
@@ -157,8 +157,8 @@ struct GpuHybridExperimentResult {
     TimingStatistics solver_time;
     TimingStatistics mpi_halo_time;
     TimingStatistics gpu_compute_time;
-    TimingStatistics boundary_d2h_time;
-    TimingStatistics halo_h2d_time;
+    TimingStatistics gpu_pack_time;
+    TimingStatistics gpu_unpack_time;
     TimingStatistics gpu_setup_time;
     TimingStatistics gpu_final_copy_time;
     ValidationResult validation{};

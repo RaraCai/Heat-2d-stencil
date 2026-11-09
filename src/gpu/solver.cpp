@@ -1,5 +1,6 @@
 #include "gpu_solver.hpp"
 
+#include <utility>
 #include <cstddef>
 #include <climits>
 #include <omp.h>

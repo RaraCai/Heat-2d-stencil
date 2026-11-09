@@ -691,8 +691,8 @@ void write_e5_gpu_header(std::ostream& file)
             "solver_median_s,solver_mean_s,solver_stddev_s,"
             "mpi_halo_median_s,mpi_halo_mean_s,mpi_halo_stddev_s,"
             "gpu_compute_median_s,gpu_compute_mean_s,gpu_compute_stddev_s,"
-            "boundary_d2h_median_s,boundary_d2h_mean_s,boundary_d2h_stddev_s,"
-            "halo_h2d_median_s,halo_h2d_mean_s,halo_h2d_stddev_s,"
+            "gpu_pack_median_s,gpu_pack_mean_s,gpu_pack_stddev_s,"
+            "gpu_unpack_median_s,gpu_unpack_mean_s,gpu_unpack_stddev_s,"
             "gpu_setup_median_s,gpu_setup_mean_s,gpu_setup_stddev_s,"
             "gpu_final_copy_median_s,gpu_final_copy_mean_s,gpu_final_copy_stddev_s,"
             "min_temperature,max_temperature,max_boundary_error,validation_passed\n";
@@ -715,9 +715,9 @@ void write_e5_gpu_row(std::ostream& file,
     file << ',';
     write_timing_columns(file, result.gpu_compute_time);
     file << ',';
-    write_timing_columns(file, result.boundary_d2h_time);
+    write_timing_columns(file, result.gpu_pack_time);
     file << ',';
-    write_timing_columns(file, result.halo_h2d_time);
+    write_timing_columns(file, result.gpu_unpack_time);
     file << ',';
     write_timing_columns(file, result.gpu_setup_time);
     file << ',';
@@ -804,8 +804,8 @@ void append_e5_gpu_runs_csv(const GpuHybridExperimentResult& result,
         file << "group,total_cpu_cores,mpi_ranks,gpu_device_index,"
                 "cpu_threads_per_rank,gpu_thread_limit,"
                 "repetition,solver_time_s,"
-                "mpi_halo_time_s,gpu_compute_time_s,boundary_d2h_time_s,"
-                "halo_h2d_time_s,gpu_setup_time_s,gpu_final_copy_time_s,"
+                "mpi_halo_time_s,gpu_compute_time_s,gpu_pack_time_s,"
+                "gpu_unpack_time_s,gpu_setup_time_s,gpu_final_copy_time_s,"
                 "validation_passed\n";
     }
     file << std::setprecision(12);
@@ -816,7 +816,7 @@ void append_e5_gpu_runs_csv(const GpuHybridExperimentResult& result,
              << result.gpu_thread_limit << ','
              << run.repetition << ',' << run.solver_time << ','
              << run.mpi_halo_time << ',' << run.gpu_compute_time << ','
-             << run.boundary_d2h_time << ',' << run.halo_h2d_time << ','
+             << run.gpu_pack_time << ',' << run.gpu_unpack_time << ','
              << run.gpu_setup_time << ',' << run.gpu_final_copy_time << ','
              << (run.passed ? 1 : 0) << '\n';
     }
@@ -859,8 +859,8 @@ std::vector<GpuHybridExperimentResult> read_e5_gpu_csv(const std::string& path)
         result.solver_time = read_timing(fields, header, "solver", path);
         result.mpi_halo_time = read_timing(fields, header, "mpi_halo", path);
         result.gpu_compute_time = read_timing(fields, header, "gpu_compute", path);
-        result.boundary_d2h_time = read_timing(fields, header, "boundary_d2h", path);
-        result.halo_h2d_time = read_timing(fields, header, "halo_h2d", path);
+        result.gpu_pack_time = read_timing(fields, header, "gpu_pack", path);
+        result.gpu_unpack_time = read_timing(fields, header, "gpu_unpack", path);
         result.gpu_setup_time = read_timing(fields, header, "gpu_setup", path);
         result.gpu_final_copy_time = read_timing(fields, header, "gpu_final_copy", path);
         result.validation.min_temperature = std::stod(fields[index("min_temperature")]);
@@ -961,8 +961,8 @@ void print_e5_gpu_summary(
               << std::setw(14) << "Solver"
               << std::setw(14) << "MPI Halo"
               << std::setw(14) << "GPU Compute"
-              << std::setw(14) << "Boundary D2H"
-              << std::setw(14) << "Halo H2D"
+              << std::setw(14) << "GPU Pack"
+              << std::setw(14) << "GPU Unpack"
               << std::setw(14) << "GPU Setup"
               << std::setw(14) << "Final Copy" << '\n';
     for (const auto& result : results) {
@@ -971,8 +971,8 @@ void print_e5_gpu_summary(
                   << std::setw(14) << result.solver_time.median
                   << std::setw(14) << result.mpi_halo_time.median
                   << std::setw(14) << result.gpu_compute_time.median
-                  << std::setw(14) << result.boundary_d2h_time.median
-                  << std::setw(14) << result.halo_h2d_time.median
+                  << std::setw(14) << result.gpu_pack_time.median
+                  << std::setw(14) << result.gpu_unpack_time.median
                   << std::setw(14) << result.gpu_setup_time.median
                   << std::setw(14) << result.gpu_final_copy_time.median << '\n';
     }

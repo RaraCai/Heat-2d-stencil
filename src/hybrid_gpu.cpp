@@ -100,8 +100,8 @@ std::vector<double> reduce_max_timings(const heat::GpuSolverTiming& timing,
         timing.solver_time,
         timing.mpi_halo_time,
         timing.gpu_compute_time,
-        timing.boundary_d2h_time,
-        timing.halo_h2d_time,
+        timing.gpu_pack_time,
+        timing.gpu_unpack_time,
         timing.gpu_setup_time,
         timing.gpu_final_copy_time
     }};
@@ -285,10 +285,10 @@ void run_configuration(int index, int& argc, char**& argv)
                 timing_samples(runs, &heat::GpuHybridRunResult::mpi_halo_time));
             result.gpu_compute_time = heat::summarize_timings(
                 timing_samples(runs, &heat::GpuHybridRunResult::gpu_compute_time));
-            result.boundary_d2h_time = heat::summarize_timings(
-                timing_samples(runs, &heat::GpuHybridRunResult::boundary_d2h_time));
-            result.halo_h2d_time = heat::summarize_timings(
-                timing_samples(runs, &heat::GpuHybridRunResult::halo_h2d_time));
+            result.gpu_pack_time = heat::summarize_timings(
+                timing_samples(runs, &heat::GpuHybridRunResult::gpu_pack_time));
+            result.gpu_unpack_time = heat::summarize_timings(
+                timing_samples(runs, &heat::GpuHybridRunResult::gpu_unpack_time));
             result.gpu_setup_time = heat::summarize_timings(
                 timing_samples(runs, &heat::GpuHybridRunResult::gpu_setup_time));
             result.gpu_final_copy_time = heat::summarize_timings(
