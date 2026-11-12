@@ -120,7 +120,10 @@ job records its ID, allocated nodes and visible GPU model in its standard job
 log. Existing E5 CSV files cause the run to stop rather than be overwritten;
 move or remove both result files explicitly before starting a fresh run.
 
-The one-rank diagnostic writes ten per-run samples and summary median, mean and
+The one-rank diagnostic writes ten per-run samples to
+`results/raw/e5_single_rank_gpu_optimized_runs.csv` and summary statistics to
+`results/raw/e5_single_rank_gpu_optimized.csv`, leaving the existing baseline
+`e5_single_rank_gpu*.csv` files untouched. It reports median, mean and
 sample standard deviation for CPU loop, GPU iteration, GPU end-to-end and GPU
 kernel times. `scripts/vanda/e5_single_rank_nsys.pbs` profiles the same
 diagnostic without overwriting benchmark CSVs. The Nsight trace from the

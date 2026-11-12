@@ -53,8 +53,9 @@ if ldd "${EXECUTABLE}" | grep -q 'not found'; then
     ldd "${EXECUTABLE}"
     exit 1
 fi
-if [[ -e results/raw/e5_single_rank_gpu.csv || -e results/raw/e5_single_rank_gpu_runs.csv ]]; then
-    echo "ERROR: Existing single-rank result files detected; archive them before rerunning." >&2
+if [[ -e results/raw/e5_single_rank_gpu_optimized.csv || \
+      -e results/raw/e5_single_rank_gpu_optimized_runs.csv ]]; then
+    echo "ERROR: Optimized single-rank result files already exist; archive them before rerunning." >&2
     exit 1
 fi
 
@@ -72,4 +73,5 @@ mpirun \
 echo
 echo "Single-rank GPU diagnostic completed."
 echo "End time: $(date)"
-ls -lh results/raw/e5_single_rank_gpu.csv results/raw/e5_single_rank_gpu_runs.csv
+ls -lh results/raw/e5_single_rank_gpu_optimized.csv \
+    results/raw/e5_single_rank_gpu_optimized_runs.csv

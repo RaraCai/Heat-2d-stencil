@@ -18,8 +18,10 @@ constexpr int kCpuThreads = 32;
 constexpr int kWarmupSteps = 5;
 constexpr int kRepetitions = 10;
 constexpr int kGpuThreadLimit = heat::kE5GpuThreadLimit;
-constexpr const char* kSummaryPath = "results/raw/e5_single_rank_gpu.csv";
-constexpr const char* kRunsPath = "results/raw/e5_single_rank_gpu_runs.csv";
+constexpr const char* kSummaryPath =
+    "results/raw/e5_single_rank_gpu_optimized.csv";
+constexpr const char* kRunsPath =
+    "results/raw/e5_single_rank_gpu_optimized_runs.csv";
 
 struct RunResult {
     int repetition = 0;
