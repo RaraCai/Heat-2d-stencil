@@ -13,7 +13,7 @@
 namespace {
 
 bool run_case(const heat::MpiDomain& domain, int steps, int device,
-              int thread_limit)
+              int thread_limit, heat::GpuSolverWorkspace& workspace)
 {
     constexpr int nx = 128;
     constexpr int ny = 130;
@@ -29,7 +29,7 @@ bool run_case(const heat::MpiDomain& domain, int steps, int device,
 
     heat::solve_mpi(cpu, cpu_next, params, domain, steps);
     heat::solve_mpi_gpu(gpu, gpu_next, params, domain, steps, device,
-                        thread_limit);
+                        thread_limit, nullptr, &workspace);
     const auto error = heat::compare_global_reference(
         gpu, cpu, domain, heat::kE5MaxAbsoluteErrorTolerance,
         heat::kE5RelativeL2ErrorTolerance);
@@ -99,8 +99,11 @@ int main(int argc, char** argv)
     try {
         heat::create_mpi_domain(domain, 128, 130);
         const int thread_limit = host_fallback ? 4 : heat::kE5GpuThreadLimit;
-        const bool odd_passed = run_case(domain, 1, device, thread_limit);
-        const bool even_passed = run_case(domain, 2, device, thread_limit);
+        heat::GpuSolverWorkspace workspace;
+        const bool odd_passed =
+            run_case(domain, 1, device, thread_limit, workspace);
+        const bool even_passed =
+            run_case(domain, 2, device, thread_limit, workspace);
         success = odd_passed && even_passed ? 1 : 0;
     } catch (const std::exception& error) {
         std::cerr << "Rank " << rank << " GPU correctness test error: "

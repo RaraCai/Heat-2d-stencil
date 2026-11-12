@@ -213,6 +213,17 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic
     )
 
+    # Standalone one-rank CPU/GPU diagnostic; executed through PBS only.
+    add_executable(test_gpu_single_rank tests/test_gpu_single_rank.cpp)
+    target_link_libraries(test_gpu_single_rank PRIVATE
+        heat_gpu
+        MPI::MPI_CXX
+        OpenMP::OpenMP_CXX
+    )
+    target_compile_options(test_gpu_single_rank PRIVATE
+        -Wall -Wextra -Wpedantic
+    )
+
     if(NOT HEAT_ENABLE_GCC_NVPTX)
         add_test(
             NAME gpu_resident_host_reference_single_rank
@@ -251,6 +262,7 @@ if(HEAT_ENABLE_GCC_NVPTX)
         heat_gpu
         stencil_hybrid_gpu
         test_gpu
+        test_gpu_single_rank
     )
         target_compile_options(${target} PRIVATE
             -foffload=nvptx-none
@@ -275,6 +287,7 @@ if(HEAT_ENABLE_GCC_NVPTX)
             test_core
             test_mpi
             test_gpu
+            test_gpu_single_rank
         )
     endif()
 

@@ -3,6 +3,7 @@
 #include <utility>
 #include <cstddef>
 #include <climits>
+#include <memory>
 #include <omp.h>
 #include <stdexcept>
 #include <string>
@@ -14,6 +15,10 @@ void launch_ftcs_and_pack_device_kernel(
     int nx, int ny, int stride, int halo, int row_begin, int row_end,
     int col_begin, int col_end, double rx, double ry,
     int north, int south, int west, int east, int thread_limit);
+void launch_ftcs_device_kernel(
+    const double* current, double* next, int stride, int halo,
+    int row_begin, int row_end, int col_begin, int col_end,
+    double rx, double ry, int thread_limit);
 void launch_pack_owned_edges(const double* grid, double* packed,
                              int nx, int ny, int stride, int halo,
                              int thread_limit);
@@ -147,10 +152,65 @@ void exchange_device_halos(const double* send_buffer, double* receive_buffer,
 
 } // namespace
 
+struct GpuSolverWorkspace::Impl {
+    int device = -1;
+    std::size_t grid_capacity = 0;
+    std::size_t edge_capacity = 0;
+    std::unique_ptr<DeviceBuffer> first;
+    std::unique_ptr<DeviceBuffer> second;
+    std::unique_ptr<DeviceBuffer> send;
+    std::unique_ptr<DeviceBuffer> receive;
+
+    void ensure(std::size_t grid_bytes, std::size_t edge_bytes,
+                int requested_device)
+    {
+        if (device != requested_device) {
+            first.reset();
+            second.reset();
+            send.reset();
+            receive.reset();
+            grid_capacity = 0;
+            edge_capacity = 0;
+            device = requested_device;
+        }
+
+        if (grid_bytes > grid_capacity) {
+            auto new_first =
+                std::make_unique<DeviceBuffer>(grid_bytes, requested_device);
+            auto new_second =
+                std::make_unique<DeviceBuffer>(grid_bytes, requested_device);
+            first = std::move(new_first);
+            second = std::move(new_second);
+            grid_capacity = grid_bytes;
+        }
+
+        if (edge_bytes > edge_capacity) {
+            auto new_send =
+                std::make_unique<DeviceBuffer>(edge_bytes, requested_device);
+            auto new_receive =
+                std::make_unique<DeviceBuffer>(edge_bytes, requested_device);
+            send = std::move(new_send);
+            receive = std::move(new_receive);
+            edge_capacity = edge_bytes;
+        }
+    }
+};
+
+GpuSolverWorkspace::GpuSolverWorkspace()
+    : impl_(std::make_unique<Impl>())
+{
+}
+
+GpuSolverWorkspace::~GpuSolverWorkspace() = default;
+GpuSolverWorkspace::GpuSolverWorkspace(GpuSolverWorkspace&&) noexcept = default;
+GpuSolverWorkspace& GpuSolverWorkspace::operator=(
+    GpuSolverWorkspace&&) noexcept = default;
+
 void solve_mpi_gpu(Grid& current, const Grid& next,
                    const NumericalParameters& params,
                    const MpiDomain& domain, int steps, int device,
-                   int thread_limit, GpuSolverTiming* timing)
+                   int thread_limit, GpuSolverTiming* timing,
+                   GpuSolverWorkspace* workspace)
 {
     validate_layout(current, next, domain);
 
@@ -181,17 +241,35 @@ void solve_mpi_gpu(Grid& current, const Grid& next,
         throw std::invalid_argument("E5 local grid dimensions are invalid.");
     }
 
-    DeviceBuffer first(grid_bytes, device);
-    DeviceBuffer second(grid_bytes, device);
-    DeviceBuffer send_buffer(edge_count * sizeof(double), device);
-    DeviceBuffer receive_buffer(edge_count * sizeof(double), device);
+    const int has_north = domain.north != MPI_PROC_NULL;
+    const int has_south = domain.south != MPI_PROC_NULL;
+    const int has_west = domain.west != MPI_PROC_NULL;
+    const int has_east = domain.east != MPI_PROC_NULL;
+    const bool has_any_neighbor = has_north || has_south || has_west || has_east;
 
-    copy_to_device(first.data(), current.data().data(), element_count, device);
-    copy_to_device(second.data(), next.data().data(), element_count, device);
+    std::unique_ptr<GpuSolverWorkspace> local_workspace;
+    if (workspace == nullptr) {
+        local_workspace = std::make_unique<GpuSolverWorkspace>();
+        workspace = local_workspace.get();
+    }
+    GpuSolverWorkspace& active_workspace = *workspace;
+    if (active_workspace.impl_ == nullptr) {
+        active_workspace.impl_ = std::make_unique<GpuSolverWorkspace::Impl>();
+    }
+    active_workspace.impl_->ensure(
+        grid_bytes,
+        has_any_neighbor ? edge_count * sizeof(double) : 0,
+        device);
+    auto& buffers = *active_workspace.impl_;
+
+    copy_to_device(buffers.first->data(), current.data().data(),
+                   element_count, device);
+    copy_to_device(buffers.second->data(), next.data().data(),
+                   element_count, device);
     measured.gpu_setup_time = MPI_Wtime() - setup_start;
 
-    double* device_current = first.data();
-    double* device_next = second.data();
+    double* device_current = buffers.first->data();
+    double* device_next = buffers.second->data();
 
     const int stride = current.stride();
     const int halo = current.halo();
@@ -202,43 +280,45 @@ void solve_mpi_gpu(Grid& current, const Grid& next,
     const int col_end = domain.global_col + ny == domain.global_ny
         ? ny - 1 : ny;
 
-    const int has_north = domain.north != MPI_PROC_NULL;
-    const int has_south = domain.south != MPI_PROC_NULL;
-    const int has_west = domain.west != MPI_PROC_NULL;
-    const int has_east = domain.east != MPI_PROC_NULL;
+    // No remote faces exist in a one-rank domain, so skip initial edge packing.
+    if (has_any_neighbor) {
+        const double pack_start = MPI_Wtime();
+        launch_pack_owned_edges(device_current, buffers.send->data(),
+                                nx, ny, stride, halo, thread_limit);
+        measured.gpu_pack_time += MPI_Wtime() - pack_start;
+    }
 
-    const double pack_start = MPI_Wtime();
-    launch_pack_owned_edges(device_current, send_buffer.data(),
-                            nx, ny, stride, halo, thread_limit);
-    measured.gpu_pack_time += MPI_Wtime() - pack_start;
-
+    // This timer isolates the iterative loop from allocation and host/device copies.
+    const double iteration_start = MPI_Wtime();
     for (int step = 0; step < steps; ++step) {
-        // OpenMPI CUDA-aware support was verified separately with
-        // omp_target_alloc pointers. No application-side D2H/H2D staging
-        // is performed in this halo path.
-        exchange_device_halos(send_buffer.data(), receive_buffer.data(),
-                              nx, ny, domain, &measured.mpi_halo_time);
+        if (has_any_neighbor) {
+            exchange_device_halos(buffers.send->data(), buffers.receive->data(),
+                                  nx, ny, domain, &measured.mpi_halo_time);
+        }
 
         const double compute_start = MPI_Wtime();
-        launch_ftcs_and_pack_device_kernel(
-            device_current, device_next, receive_buffer.data(),
-            send_buffer.data(), nx, ny, stride, halo,
-            row_begin, row_end, col_begin, col_end, params.rx, params.ry,
-            has_north, has_south, has_west, has_east, thread_limit);
+        if (has_any_neighbor) {
+            launch_ftcs_and_pack_device_kernel(
+                device_current, device_next, buffers.receive->data(),
+                buffers.send->data(), nx, ny, stride, halo,
+                row_begin, row_end, col_begin, col_end, params.rx, params.ry,
+                has_north, has_south, has_west, has_east, thread_limit);
+        } else {
+            launch_ftcs_device_kernel(
+                device_current, device_next, stride, halo,
+                row_begin, row_end, col_begin, col_end,
+                params.rx, params.ry, thread_limit);
+        }
         measured.gpu_compute_time += MPI_Wtime() - compute_start;
 
         std::swap(device_current, device_next);
     }
+    measured.iteration_time = MPI_Wtime() - iteration_start;
 
     const double final_copy_start = MPI_Wtime();
     copy_from_device(current.data().data(), device_current,
                      element_count, device);
     measured.gpu_final_copy_time = MPI_Wtime() - final_copy_start;
-
-    first.release();
-    second.release();
-    send_buffer.release();
-    receive_buffer.release();
 
     measured.solver_time = MPI_Wtime() - solver_start;
     if (timing != nullptr) {

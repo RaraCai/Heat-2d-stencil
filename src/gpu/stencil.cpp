@@ -6,6 +6,34 @@
 namespace heat {
 namespace {
 
+void ftcs_step_device(
+    const double* current, double* next, int stride, int halo,
+    int row_begin, int row_end, int col_begin, int col_end,
+    double rx, double ry, int thread_limit)
+{
+    if (thread_limit < 1) {
+        throw std::invalid_argument("OpenMP GPU thread_limit must be positive.");
+    }
+
+    #pragma omp target teams distribute parallel for collapse(2) \
+        is_device_ptr(current, next) thread_limit(thread_limit)
+    for (int i = row_begin; i < row_end; ++i) {
+        for (int j = col_begin; j < col_end; ++j) {
+            const std::size_t center =
+                static_cast<std::size_t>(i + halo) * stride + j + halo;
+            const double center_value = current[center];
+            double value = center_value;
+            value += rx * (current[center - stride] -
+                           2.0 * center_value +
+                           current[center + stride]) +
+                     ry * (current[center - 1] -
+                           2.0 * center_value +
+                           current[center + 1]);
+            next[center] = value;
+        }
+    }
+}
+
 void ftcs_step_and_pack_device(
     const double* current, double* next, const double* received, double* packed,
     int nx, int ny, int stride, int halo, int row_begin, int row_end,
@@ -41,10 +69,10 @@ void ftcs_step_and_pack_device(
             }
             next[center] = value;
 
-            if (i == 0) packed[j] = value;
-            if (i == nx - 1) packed[ny + j] = value;
-            if (j == 0) packed[2 * ny + i] = value;
-            if (j == ny - 1) packed[2 * ny + nx + i] = value;
+            if (i == 0 && north) packed[j] = value;
+            if (i == nx - 1 && south) packed[ny + j] = value;
+            if (j == 0 && west) packed[2 * ny + i] = value;
+            if (j == ny - 1 && east) packed[2 * ny + nx + i] = value;
         }
     }
 }
@@ -75,6 +103,15 @@ void pack_owned_edges_device(const double* grid, double* packed,
 } // namespace heat
 
 namespace heat {
+
+void launch_ftcs_device_kernel(
+    const double* current, double* next, int stride, int halo,
+    int row_begin, int row_end, int col_begin, int col_end,
+    double rx, double ry, int thread_limit)
+{
+    ftcs_step_device(current, next, stride, halo, row_begin, row_end,
+                     col_begin, col_end, rx, ry, thread_limit);
+}
 
 void launch_ftcs_and_pack_device_kernel(
     const double* current, double* next, const double* received, double* packed,

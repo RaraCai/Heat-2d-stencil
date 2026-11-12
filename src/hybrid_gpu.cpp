@@ -164,6 +164,7 @@ void run_configuration(int index, int& argc, char**& argv)
         heat::Grid next = heat::make_local_grid(domain);
         std::vector<heat::GpuHybridRunResult> runs;
         if (domain.rank == 0) runs.reserve(heat::kE5Repeats);
+        heat::GpuSolverWorkspace gpu_workspace;
         bool all_passed = true;
         double global_min = std::numeric_limits<double>::max();
         double global_max = std::numeric_limits<double>::lowest();
@@ -176,7 +177,8 @@ void run_configuration(int index, int& argc, char**& argv)
 
             heat::GpuSolverTiming local_timing{};
             heat::solve_mpi_gpu(current, next, params, domain, heat::kE5Steps,
-                                device, config.thread_limit, &local_timing);
+                                device, config.thread_limit, &local_timing,
+                                &gpu_workspace);
             const auto validation = heat::validate_global(current, domain);
             const auto max_times = reduce_max_timings(
                 local_timing, domain.cart_comm, 0);

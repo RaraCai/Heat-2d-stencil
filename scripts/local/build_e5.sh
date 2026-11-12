@@ -56,17 +56,17 @@ echo "GPU final link command:"
 cat "$LINK_FILE"
 
 cmake --build "$BUILD_DIR" \
-    --target stencil_hybrid_gpu test_gpu test_core test_mpi \
+    --target stencil_hybrid_gpu test_gpu test_gpu_single_rank test_core test_mpi \
     --parallel 4
 
-for executable in stencil_hybrid_gpu test_gpu test_core test_mpi; do
+for executable in stencil_hybrid_gpu test_gpu test_gpu_single_rank test_core test_mpi; do
     [[ -x "$BUILD_DIR/$executable" ]] || {
         echo "ERROR: Missing executable $BUILD_DIR/$executable" >&2
         exit 1
     }
 done
 
-for executable in stencil_hybrid_gpu test_gpu; do
+for executable in stencil_hybrid_gpu test_gpu test_gpu_single_rank; do
     if ldd "$BUILD_DIR/$executable" | grep -q 'not found'; then
         echo "ERROR: Missing dynamic library for $executable." >&2
         ldd "$BUILD_DIR/$executable"
@@ -82,4 +82,5 @@ echo " E5 DIRECT GPU MPI BUILD SUCCESSFUL"
 echo "========================================"
 echo "GPU executable: $BUILD_DIR/stencil_hybrid_gpu"
 echo "GPU correctness executable: $BUILD_DIR/test_gpu"
-echo "Next: qsub scripts/vanda/debug.pbs"
+echo "Single-rank diagnostic: $BUILD_DIR/test_gpu_single_rank"
+echo "Next: qsub scripts/vanda/e5_single_rank_GPU.pbs"

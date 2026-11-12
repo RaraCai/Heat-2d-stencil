@@ -36,8 +36,9 @@ held fixed. Results are written to `results/raw/e3_weak.csv`.
 On Vanda, submit the full E3 job with `qsub scripts/vanda/e3_weak.pbs`.
 
 The E4 CPU experiment is unchanged and is submitted with
-`qsub scripts/vanda/e4_hybrid_CPU.pbs`. E5 uses a Login Node build script and a
-single PBS job for its five Group A GPU configurations. From a fresh clone:
+`qsub scripts/vanda/e4_hybrid_CPU.pbs`. E5's GCC 13.3/OpenMPI 5.0.3 build is
+performed with `scripts/local/build_e5.sh`. The one-rank performance diagnostic
+and five-configuration GPU experiment use separate PBS jobs:
 
 ```bash
 git clone https://github.com/5555555559/Heat-2d-stencil.git
@@ -46,19 +47,19 @@ cd Heat-2d-stencil
 # Run E4 first and wait for it to finish.
 qsub scripts/vanda/e4_hybrid_CPU.pbs
 
-# Once E4 has produced its full baseline, build E5 and run CPU/MPI CTest.
+# Once E4 has produced its full baseline, build E5 and run CTest.
 ./scripts/local/build_e5.sh
+
+# Run the fixed 4096 x 4096, 500-step, 10-repetition CPU/GPU comparison.
+qsub scripts/vanda/e5_single_rank_GPU.pbs
 
 # Submit the five E5 Group A configurations on one GPU.
 qsub scripts/vanda/e5_hybrid_GPU.pbs
 ```
 
-`scripts/local/build_e5.sh` automatically loads the validated GCC 13.2.0,
-NVHPC 24.7-CUDA-12.3.0, OpenMPI 4.1.6-GCC-13.2.0 and
-CMake 3.27.6-GCCcore-13.2.0 modules; sets `OMPI_CXX` to `nvc++`; verifies the
-E4 CSV contains all 15 configurations; and builds into `build/vanda_gpu/` with
-NVHPC `-mp=gpu -gpu=cc86`. It runs CPU/MPI CTest on the Login Node. No manual
-GPU environment setup is required.
+`scripts/local/build_e5.sh` loads the GCC 13.3, OpenMPI 5.0.3 and CMake 3.29.3
+modules, verifies the complete E4 baseline and builds the GCC NVPTX-offload
+targets into `build/vanda_e5_gcc13/`.
 
 The PBS job does not compile. It rechecks the E4 baseline and E5 executable,
 then runs the five production configurations. Check the PBS job status with
@@ -77,6 +78,10 @@ rank placement. Static configuration checks and runtime rank/node/device
 checks reject oversubscribed or mismatched layouts.
 
 The GPU Solver keeps two full grids resident on the GPU for all 500 steps.
+Callers performing repeated solves should retain one `GpuSolverWorkspace` per
+MPI rank and pass it to each sequential solve; its grid and halo buffers are
+reused. The single-rank path allocates no halo buffers and uses a stencil-only
+kernel, since no MPI faces need packing or exchange.
 Owned edges are packed into OpenMP device buffers and exchanged directly with
 blocking MPI calls; the application does not stage halos through host memory.
 After each exchange, one GPU kernel reads remote face values from the receive
@@ -114,6 +119,15 @@ Results are written to `results/raw/e5_gpu.csv` and
 job records its ID, allocated nodes and visible GPU model in its standard job
 log. Existing E5 CSV files cause the run to stop rather than be overwritten;
 move or remove both result files explicitly before starting a fresh run.
+
+The one-rank diagnostic writes ten per-run samples and summary median, mean and
+sample standard deviation for CPU loop, GPU iteration, GPU end-to-end and GPU
+kernel times. `scripts/vanda/e5_single_rank_nsys.pbs` profiles the same
+diagnostic without overwriting benchmark CSVs. The Nsight trace from the
+pre-optimization version recorded 10,056 `cuMemAlloc_v2`/`cuMemFree_v2` calls
+for 5,005 FTCS launches; its API events had no call stacks, so this count alone
+does not identify the exact libgomp allocation site or imply that the summed
+API time can be subtracted from solver time.
 
 ## MPI extension contract
 
