@@ -1,150 +1,205 @@
-# Heat 2D Stencil — E1–E5 experiments
+# Heat 2D Stencil
 
-C++17, Linux/WSL, CMake + Ninja. `heat_core` contains shared grid, initialization,
-FTCS step, validation, benchmark statistics and CSV output. E1, MPI E2 strong
-scaling, MPI E3 weak scaling, E4 MPI + OpenMP CPU, and E5 MPI + OpenMP GPU
-experiments are implemented.
+> DSA5208 Project 3: Parallelizing an Algorithm with MPI+X
 
-## Build and run
+A C++17 implementation of the two-dimensional heat-equation FTCS stencil and five experiments:
 
-```bash
-cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build/release
-./build/release/stencil_serial
+- **E1:** Serial baseline
+- **E2:** MPI strong scaling
+- **E3:** MPI weak scaling
+- **E4:** MPI + OpenMP CPU hybrid
+- **E5:** MPI + OpenMP GPU hybrid using GCC NVPTX offload
+
+The primary workflow in this README reproduces E1–E5 on Vanda. Local Linux instructions are provided as a short alternative for E1–E4; a host-only local machine cannot produce the formal E5 GPU results.
+
+## Repository layout
+
+```text
+.
+├── CMakeLists.txt                  # Build targets, dependencies, and tests
+├── include/                        # Public headers and experiment configuration
+├── src/
+│   ├── core/                       # Grid, FTCS, validation, statistics, CSV output
+│   ├── gpu/                        # GPU solver and stencil
+│   ├── serial.cpp                  # E1
+│   ├── strong_mpi.cpp              # E2
+│   ├── weak_mpi.cpp                # E3
+│   ├── hybrid.cpp                  # E4
+│   ├── hybrid_gpu.cpp              # E5
+│   └── mpi.cpp                     # MPI communication
+├── scripts/
+│   ├── local/                      # Local build and run scripts
+│   └── vanda/                      # Vanda PBS job scripts
+├── tests/                          # Core, MPI, and GPU correctness tests
+├── results/raw/                    # Experiment CSV output (created at runtime)
+└── build/                          # CMake build trees (created at runtime)
 ```
 
-Run from repository root; output is `results/raw/e1_serial.csv`.
-The full E1 workload is five grids, 500 iterations and 10 repeats per grid;
-4096² can take substantial time. The executable updates one compact repeat
-counter per grid on stderr; the summary and CSV are written after all grids
-finish.
-`build/debug` may be used for debugging but must not be used for performance
-measurements.
+`heat_core` contains the shared grid, initialization, FTCS update, validation, benchmark statistics, and CSV output. MPI domain decomposition and halo exchange are implemented in `heat_mpi`; E4 and E5 use separate OpenMP CPU and GPU kernels.
 
-Run E2 strong scaling with `scripts/local/run_e2.sh`. It writes one row per
-rank configuration to `results/raw/e2_strong.csv`; the 1-rank configuration
-is run first to establish the MPI speedup baseline (and is automatically
-included when a subset of rank counts is requested).
-Individual repetition samples are used for statistics but are not written to
-CSV. The script prints one E1-style summary table after all selected runs.
+## Reproduce E1–E5 workflow on Vanda
 
-Run E3 weak scaling with `scripts/local/run_e3.sh [ranks...]`. Supported rank
-counts are 1, 4, 16, 64, and 256; the 1-rank baseline is automatically run
-first. Each rank owns a fixed 256 x 256 grid, while the global grid scales from
-256 x 256 to 4096 x 4096. Spatial spacing, time step, and iteration count are
-held fixed. Results are written to `results/raw/e3_weak.csv`.
-On Vanda, submit the full E3 job with `qsub scripts/vanda/e3_weak.pbs`.
+Run the experiments from a shared project directory visible to Vanda compute nodes. The PBS scripts load GCC 13.3.0, OpenMPI 5.0.3, and CMake 3.29.3. E5 additionally requires a GPU allocation and GCC OpenMP `nvptx-none` offload support.
 
-The E4 CPU experiment is unchanged and is submitted with
-`qsub scripts/vanda/e4_hybrid_CPU.pbs`. E5's GCC 13.3/OpenMPI 5.0.3 build is
-performed with `scripts/local/build_e5.sh`. The one-rank performance diagnostic
-and five-configuration GPU experiment use separate PBS jobs:
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/5555555559/Heat-2d-stencil.git
 cd Heat-2d-stencil
-
-# Run E4 first and wait for it to finish.
-qsub scripts/vanda/e4_hybrid_CPU.pbs
-
-# Once E4 has produced its full baseline, build E5 and run CTest.
-./scripts/local/build_e5.sh
-
-# Run the fixed 4096 x 4096, 500-step, 10-repetition CPU/GPU comparison.
-qsub scripts/vanda/e5_single_rank_GPU.pbs
-
-# Submit the five E5 Group A configurations on one GPU.
-qsub scripts/vanda/e5_hybrid_GPU.pbs
 ```
 
-`scripts/local/build_e5.sh` loads the GCC 13.3, OpenMPI 5.0.3 and CMake 3.29.3
-modules, verifies the complete E4 baseline and builds the GCC NVPTX-offload
-targets into `build/vanda_e5_gcc13/`.
+Run all subsequent commands from this repository directory.
 
-The PBS job does not compile. It rechecks the E4 baseline and E5 executable,
-then runs the five production configurations. Check the PBS job status with
-`qstat -u "$USER"` and read its combined output log for progress and the final
-summary.
+### 2. Set your Vanda PBS account
 
-E5 reports concise rank-0 repetition progress and a configuration summary to
-the PBS log. Errors remain explicit; normal execution does not emit per-rank
-stage diagnostics.
+Every PBS script contains the neutral `YOUR_PBS_ACCOUNT` placeholder. Before submitting jobs, replace it with the Vanda project/account assigned to you. A personal allocation is commonly named `personal-<your-username>` (for example, `personal-jane.doe`); confirm the exact value for your account. Do not use another person's project.
 
-The job requests one node, 36 CPU cores and one GPU. E5 runs only the five
-Group A MPI-rank and CPU threads-per-rank configurations from E4 (2, 4, 8, 16,
-and 32 ranks); all ranks share GPU device 0. `gpu_thread_limit` (256) is a
-separate device-kernel setting; CPU threads-per-rank continue to control host
-rank placement. Static configuration checks and runtime rank/node/device
-checks reject oversubscribed or mismatched layouts.
+Run this command and enter your own authorized account:
 
-The GPU Solver keeps two full grids resident on the GPU for all 500 steps.
-Callers performing repeated solves should retain one `GpuSolverWorkspace` per
-MPI rank and pass it to each sequential solve; its grid and halo buffers are
-reused. The single-rank path allocates no halo buffers and uses a stencil-only
-kernel, since no MPI faces need packing or exchange.
-Owned edges are packed into OpenMP device buffers and exchanged directly with
-blocking MPI calls; the application does not stage halos through host memory.
-After each exchange, one GPU kernel reads remote face values from the receive
-buffer directly, updates the owned grid, and packs the updated edges for the
-next step. This avoids separate per-step pack and halo-unpack kernel launches.
-Only setup and the final result copy transfer complete grids. Solver time
-includes setup, iterations, halo synchronization and the final copy. The output
-separates MPI halo, GPU compute, setup, and final-copy timing; component maxima
-are diagnostics and must not be added together as a total runtime. Initial edge
-packing is reported as GPU pack time; pack work fused into each stencil launch
-is included in GPU compute time, and no separate halo-unpack launch remains.
-The solver wall time also includes releasing its resident device buffers.
+```bash
+read -r -p "Authorized Vanda PBS account: " PBS_PROJECT
+if [[ -z "$PBS_PROJECT" ]]; then
+    echo "PBS account is required." >&2
+    exit 1
+fi
 
-Each configuration runs only the recorded GPU repetitions; there are no
-additional CPU/GPU reference solves. Every GPU repetition undergoes global
-physical-boundary/temperature validation. E5 reads the matching Group A solver
-median from `results/raw/e4_hybrid.csv` as its CPU baseline and uses it to
-calculate GPU/CPU speedup. Failed configurations are not written as valid
-timing results.
-The summary and CSV report two speedups:
+for script in scripts/vanda/*.pbs; do
+    sed -i "s/^#PBS -P .*/#PBS -P ${PBS_PROJECT}/" "$script"
+done
 
-- **Within-group configuration speedup:** the 2-rank Group A GPU median
-  divided by this configuration's GPU solver median.
-- **GPU vs CPU E4 speedup:** the matching E4 rank/thread configuration median
-  divided by this E5 GPU solver median.
+grep -n '^#PBS -P' scripts/vanda/*.pbs
+```
 
-E5 and E4 Group A use matching CPU rank/thread configurations. GPU solver time
-includes GPU setup, boundary/halo transfers, MPI exchange,
-kernel launch/synchronization and final copy; E4 solver time does not include
-GPU transfers, so this is an end-to-end runtime comparison, not an equal-resource
-CPU/GPU efficiency comparison.
+Check that the output shows your account and no `YOUR_PBS_ACCOUNT` placeholders. PBS jobs use the directory from which `qsub` is run as their working directory.
 
-Results are written to `results/raw/e5_gpu.csv` and
-`results/raw/e5_gpu_runs.csv` (5 summary rows and 50 repetition rows). The PBS
-job records its ID, allocated nodes and visible GPU model in its standard job
-log. Existing E5 CSV files cause the run to stop rather than be overwritten;
-move or remove both result files explicitly before starting a fresh run.
+### 3. Submit E1, the serial baseline
 
-The one-rank diagnostic writes ten per-run samples to
-`results/raw/e5_single_rank_gpu_optimized_runs.csv` and summary statistics to
-`results/raw/e5_single_rank_gpu_optimized.csv`, leaving the existing baseline
-`e5_single_rank_gpu*.csv` files untouched. It reports median, mean and
-sample standard deviation for CPU loop, GPU iteration, GPU end-to-end and GPU
-kernel times. `scripts/vanda/e5_single_rank_nsys.pbs` profiles the same
-diagnostic without overwriting benchmark CSVs. The Nsight trace from the
-pre-optimization version recorded 10,056 `cuMemAlloc_v2`/`cuMemFree_v2` calls
-for 5,005 FTCS launches; its API events had no call stacks, so this count alone
-does not identify the exact libgomp allocation site or imply that the summed
-API time can be subtracted from solver time.
+```bash
+qsub scripts/vanda/e1_serial.pbs
+qstat -u "$USER"
+```
 
-## MPI extension contract
+Wait for the job to finish and inspect its PBS output log. Continue only after it reports successful completion and the baseline exists:
 
-- `Grid(nx, ny, halo, global_row, global_col)` owns a local rectangular region.
-- `initialize` uses **global** coordinates and sets only owned cells.
-- Before `ftcs_step`, exchange one-layer halos with four Cartesian neighbors.
-- `ftcs_step` computes only owned, nonphysical-boundary cells; MPI owns the
-  communication and the `swap_data` call between steps.
-- On global physical boundaries, initialize both buffers consistently; for
-  MPI local regions touching a physical boundary, copy those owned boundary
-  cells to both buffers before time stepping.
-- `validate_local` scans owned cells; aggregate its metrics using MPI reductions.
-- Serial and MPI reference comparisons require matching global indexing,
-  iteration counts and boundary handling.
+```bash
+wc -l results/raw/e1_serial.csv
+```
 
-The `ftcs_step` kernel is serial by design; E4 CPU and E5 GPU use separate
-OpenMP kernels without changing the physical model.
+E1 runs five grid sizes (256, 512, 1024, 2048, and 4096), with 500 iterations and 10 repetitions per grid. The CSV should contain five data rows plus its header (6 lines).
+
+### 4. Submit E2, MPI strong scaling
+
+E2 checks that the E1 baseline is present and includes the 4096 grid result.
+
+```bash
+qsub scripts/vanda/e2_strong.pbs
+qstat -u "$USER"
+```
+
+Wait for successful completion before proceeding. E2 uses 1, 4, 16, 64, and 256 MPI ranks and writes `results/raw/e2_strong.csv` (5 data rows plus the header).
+
+### 5. Submit E3, MPI weak scaling
+
+```bash
+qsub scripts/vanda/e3_weak.pbs
+qstat -u "$USER"
+```
+
+Each rank owns a 256 × 256 grid. E3 uses 1, 4, 16, 64, and 256 ranks and writes `results/raw/e3_weak.csv` (5 data rows plus the header). Wait for successful completion before proceeding.
+
+### 6. Submit E4, MPI + OpenMP CPU
+
+```bash
+qsub scripts/vanda/e4_hybrid_CPU.pbs
+qstat -u "$USER"
+```
+
+E4 runs 15 MPI-rank/OpenMP-thread configurations on a 4096 × 4096 grid, with 500 iterations and 10 repetitions per configuration. Wait for successful completion, then verify both E4 outputs:
+
+```bash
+wc -l results/raw/e4_hybrid.csv results/raw/e4_hybrid_runs.csv
+```
+
+The expected line counts are 16 for the summary and 151 for the repetition records, including the CSV headers. E5 requires the complete 15-configuration summary in `results/raw/e4_hybrid.csv`.
+
+### 7. Build and submit E5, MPI + OpenMP GPU
+
+After E4 has completed successfully, build E5 from the Vanda login environment at the repository root:
+
+```bash
+bash scripts/local/build_e5.sh
+```
+
+The script loads the required modules, verifies the complete E4 baseline, builds the GCC NVPTX targets in `build/vanda_e5_gcc13/`, and runs CTest. Then submit the formal GPU experiment:
+
+```bash
+qsub scripts/vanda/e5_hybrid_GPU.pbs
+qstat -u "$USER"
+```
+
+The job requests one node and one GPU, runs five Group A rank/thread configurations with 10 repetitions each, and compares them with the matching E4 CPU configurations. The GPU timings include setup, MPI halo exchange, kernel execution, and final copy; they are end-to-end timings, not equal-resource CPU/GPU efficiency measurements.
+
+Expected output:
+
+- `results/raw/e5_gpu.csv` — 5 configuration summaries
+- `results/raw/e5_gpu_runs.csv` — 50 repetition records
+
+### 8. Verify all experiment outputs
+
+After all jobs have completed, confirm the expected CSV files and row counts:
+
+```bash
+wc -l \
+    results/raw/e1_serial.csv \
+    results/raw/e2_strong.csv \
+    results/raw/e3_weak.csv \
+    results/raw/e4_hybrid.csv \
+    results/raw/e4_hybrid_runs.csv \
+    results/raw/e5_gpu.csv \
+    results/raw/e5_gpu_runs.csv
+```
+
+Expected line counts, including headers: E1 = 6, E2 = 6, E3 = 6, E4 summary = 16, E4 runs = 151, E5 summary = 6, and E5 runs = 51. A smaller count indicates an incomplete run; check the corresponding PBS log before using the data. Use `qstat -u "$USER"` to check job status and `ls -lt` in the submission directory to locate recent PBS logs.
+
+## Local Linux quick reference (E1–E4 only)
+
+Local runs require a C++17 compiler, CMake 3.16 or newer, MPI (`mpicxx` and `mpirun`), and OpenMP. E1 also requires Ninja; E2/E3 use GCC-specific compiler options. On Ubuntu or WSL:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake ninja-build openmpi-bin libopenmpi-dev
+```
+
+From the repository root, run the experiment script:
+
+```bash
+bash scripts/local/run_e1.sh  # E1
+bash scripts/local/run_e2.sh  # E2
+bash scripts/local/run_e3.sh  # E3
+bash scripts/local/run_e4.sh  # E4
+```
+
+E2 and E3 default to all five MPI sizes (1, 4, 16, 64, and 256 ranks), which may exceed the resources available on a workstation. To run a subset for local validation, pass rank counts, for example:
+
+```bash
+bash scripts/local/run_e2.sh 1 4 16 256
+bash scripts/local/run_e3.sh 1 4 16 256
+```
+
+The formal E5 experiment requires Vanda GPU resources and cannot be reproduced as a GPU benchmark on a host-only local build.
+
+## Results and reruns
+
+All experiment CSVs are written to `results/raw/`. Vanda scripts archive previous E2–E4 outputs where applicable. Local E2/E3 scripts delete their corresponding CSV before running. The E5 formal run stops if either E5 output CSV already exists; archive existing files before rerunning:
+
+```bash
+BACKUP_DIR="results/archive/e5_backup_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+for file in results/raw/e5_gpu.csv results/raw/e5_gpu_runs.csv; do
+    if [[ -e "$file" ]]; then
+        mv "$file" "$BACKUP_DIR/"
+    fi
+done
+```
+
+Do not mix CSVs from different runs when comparing experiments.
