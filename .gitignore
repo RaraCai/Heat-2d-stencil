@@ -2,7 +2,7 @@ build/
 out/
 .vs/
 .vscode/
-results/raw/*.csv
+results/
 *.log
 *.o[0-9]*
 *.e[0-9]*
