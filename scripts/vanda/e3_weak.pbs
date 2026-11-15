@@ -1,7 +1,7 @@
 
 #!/bin/bash
 
-#PBS -P personal-linxi.li
+#PBS -P YOUR_PBS_ACCOUNT
 #PBS -N heat_e3_weak
 #PBS -l select=4:ncpus=72:mpiprocs=72:ompthreads=1:mem=500gb
 #PBS -l walltime=01:00:00

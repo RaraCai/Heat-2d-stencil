@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#PBS -P personal-linxi.li
+#PBS -P YOUR_PBS_ACCOUNT
 #PBS -N heat_e4_hybrid_cpu
 #PBS -l select=4:ncpus=36:mpiprocs=36:ompthreads=1:mem=8gb
 #PBS -l place=scatter

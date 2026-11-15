@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#PBS -P personal-yuxuan.cai
+#PBS -P YOUR_PBS_ACCOUNT
 #PBS -N heat_e5_hybrid_gpu
 #PBS -l select=1:ncpus=36:ngpus=1:mpiprocs=36:ompthreads=1
 #PBS -l walltime=02:00:00
