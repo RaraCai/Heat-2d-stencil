@@ -1,0 +1,2 @@
+global_nx,global_ny,ranks,process_rows,process_cols,steps,repetitions,runtime_median_s,runtime_min_s,runtime_max_s,halo_runtime_median_s,speedup_mpi,speedup_serial,parallel_efficiency,min_temperature,max_temperature,max_boundary_error,validation_passed
+4096,4096,1,1,1,500,10,7.3895219705,7.170991726,8.096048443,0.000531550000044,1,1.14933851985,1,20,100,0,1
